@@ -32,3 +32,4 @@ Thumbs.db
 .directory
 
 # Models (already included)
+*.pt
