@@ -1,5 +1,11 @@
 # FastAPI Backend Integration (Frontend Contract)
 
+**Current contract:** See **[docs/FRONTEND_API_CONTRACT.md](docs/FRONTEND_API_CONTRACT.md)** for the up-to-date endpoints and `outputs` fields (manifest extract, multipart analyze with optional `reference` / `manifest`, heatmaps, manifest item list).
+
+The sections below are a **legacy** reference (e.g. `modelOutputImages`, `objectsImage`) and may not match the latest UI.
+
+---
+
 This Frontend is already wired for backend integration. Implement the endpoints below in **FastAPI** and the UI will work without further Frontend changes.
 
 ## Base URL / Dev proxy

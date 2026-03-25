@@ -1,15 +1,16 @@
 import { PROHIBITED_TERMS_LOWER } from '../utils/constants';
 
-const ManifestComparison = ({ declaredItems, detections }) => {
+const ManifestComparison = ({ manifestItems, detections }) => {
   const normalizeItem = (text) => text.trim().toLowerCase();
   
   const isProhibited = (label) => PROHIBITED_TERMS_LOWER.has(normalizeItem(label));
 
   const getComparisonData = () => {
     const declaredNorm = {};
-    declaredItems.forEach(item => {
-      if (item.trim()) {
-        declaredNorm[normalizeItem(item)] = item;
+    (manifestItems ?? []).forEach((item) => {
+      const s = String(item).trim();
+      if (s) {
+        declaredNorm[normalizeItem(s)] = s;
       }
     });
 
@@ -91,7 +92,7 @@ const ManifestComparison = ({ declaredItems, detections }) => {
     row.status === 'PROHIBITED' || row.status === 'UNDECLARED' || row.status === 'NOT_FOUND'
   ).length;
 
-  if (declaredItems.length === 0) {
+  if (!manifestItems?.length) {
     return null;
   }
 

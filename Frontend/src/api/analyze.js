@@ -4,12 +4,24 @@ export function getApiBaseUrl() {
   return base.replace(/\/+$/, '');
 }
 
-export async function analyzeScan({ file }) {
+/**
+ * POST /api/analyze
+ * Form fields: file (required image), optional reference (image), optional manifest (PDF).
+ */
+export async function analyzeScan({ file, reference, manifest }) {
   const base = getApiBaseUrl();
   const url = `${base}/api/analyze`;
 
   const form = new FormData();
-  form.append('file', file);
+  if (file) {
+    form.append('file', file);
+  }
+  if (reference) {
+    form.append('reference', reference);
+  }
+  if (manifest) {
+    form.append('manifest', manifest);
+  }
 
   const res = await fetch(url, {
     method: 'POST',
@@ -23,4 +35,3 @@ export async function analyzeScan({ file }) {
 
   return await res.json();
 }
-

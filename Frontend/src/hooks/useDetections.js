@@ -9,20 +9,28 @@ export const useDetections = () => {
   const [outputs, setOutputs] = useState(null);
   const [error, setError] = useState(null);
 
-  const analyze = useCallback(async (imageFile) => {
+  /**
+   * @param {{ file?: File, reference?: File, manifest?: File } | undefined} payload
+   */
+  const analyze = useCallback(async (payload) => {
     setIsLoading(true);
     setError(null);
-    
+
+    const file = payload?.file;
+
     try {
-      // Demo mode: allow running UI without a file selected yet.
-      if (!imageFile) {
+      if (!file) {
         setDetections(DUMMY_DETECTIONS);
         setRisk(DUMMY_RISK);
         setOutputs(null);
         return { detections: DUMMY_DETECTIONS, risk: DUMMY_RISK, outputs: null };
       }
 
-      const data = await analyzeScan({ file: imageFile });
+      const data = await analyzeScan({
+        file,
+        reference: payload?.reference,
+        manifest: payload?.manifest,
+      });
       const nextDetections = data?.detections ?? [];
       const nextRisk = data?.risk ?? null;
       const nextOutputs = data?.outputs ?? null;
@@ -33,7 +41,6 @@ export const useDetections = () => {
 
       return { detections: nextDetections, risk: nextRisk, outputs: nextOutputs };
     } catch (err) {
-      // Fallback to dummy data so UI remains demo-able without backend.
       setDetections(DUMMY_DETECTIONS);
       setRisk(DUMMY_RISK);
       setOutputs(null);
@@ -56,13 +63,13 @@ export const useDetections = () => {
     setError(null);
   }, []);
 
-  return { 
-    analyze, 
-    isLoading, 
-    detections, 
-    risk, 
+  return {
+    analyze,
+    isLoading,
+    detections,
+    risk,
     outputs,
-    error, 
-    clearResults 
+    error,
+    clearResults,
   };
 };

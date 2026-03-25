@@ -1,41 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { FileText, Loader2, Upload, X } from 'lucide-react';
-import { extractManifestItemsFromPdf } from '../utils/pdfManifest';
+import { extractManifestFromPdf } from '../api/manifest';
 
-const Sidebar = ({ 
-  declaredItems, 
-  onDeclarationChange, 
-  referenceImages, 
+const Sidebar = ({
+  manifestItems,
+  onManifestItemsChange,
+  onManifestFileChange,
+  referenceImages,
   onReferenceUpload,
-  onRemoveReference 
+  onRemoveReference,
 }) => {
-  const [rawDeclarationText, setRawDeclarationText] = useState(declaredItems.join('\n'));
   const [manifestPdf, setManifestPdf] = useState(null);
   const [pdfStatus, setPdfStatus] = useState({ state: 'idle', message: '' });
   const [extractedItems, setExtractedItems] = useState([]);
 
-  useEffect(() => {
-    setRawDeclarationText(declaredItems.join('\n'));
-  }, [declaredItems]);
-
-  const declaredCount = declaredItems.length;
   const extractedCount = extractedItems.length;
-
-  const handleTextChange = (e) => {
-    const text = e.target.value;
-    setRawDeclarationText(text);
-    const items = text
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0);
-    onDeclarationChange(text, items);
-  };
-
-  const applyExtractedToDeclaration = () => {
-    const nextText = extractedItems.join('\n');
-    const nextItems = extractedItems;
-    onDeclarationChange(nextText, nextItems);
-  };
 
   const handlePdfUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -53,17 +32,21 @@ const Sidebar = ({
     setPdfStatus({ state: 'loading', message: 'Extracting items from PDF…' });
 
     try {
-      const { items } = await extractManifestItemsFromPdf(file);
+      const { items } = await extractManifestFromPdf(file);
       setExtractedItems(items);
+      onManifestItemsChange(items);
+      onManifestFileChange(file);
       setPdfStatus({
         state: 'ready',
-        message: items.length ? `Extracted ${items.length} item(s).` : 'No items found in PDF text.',
+        message: items.length ? `Extracted ${items.length} item(s).` : 'No items found in PDF.',
       });
     } catch (err) {
       setExtractedItems([]);
+      onManifestItemsChange([]);
+      onManifestFileChange(null);
       setPdfStatus({
         state: 'error',
-        message: err?.message ? `Failed to read PDF: ${err.message}` : 'Failed to read PDF.',
+        message: err?.message ? String(err.message) : 'Manifest extract failed.',
       });
     }
   };
@@ -72,6 +55,8 @@ const Sidebar = ({
     setManifestPdf(null);
     setExtractedItems([]);
     setPdfStatus({ state: 'idle', message: '' });
+    onManifestItemsChange([]);
+    onManifestFileChange(null);
   };
 
   const extractedPreview = useMemo(() => extractedItems.slice(0, 12), [extractedItems]);
@@ -79,46 +64,33 @@ const Sidebar = ({
   return (
     <aside className="w-full lg:w-[340px] shrink-0">
       <div className="space-y-6 lg:sticky lg:top-20 lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto lg:pr-1">
-      {/* Cargo Declaration */}
-      <div className="card card-hover">
-        <div className="flex items-baseline justify-between gap-3 mb-3">
-          <h3 className="section-title">Cargo declaration</h3>
-          <span className="section-subtitle">Manifest</span>
-        </div>
-        
-        {/* Tag Pills */}
-        {declaredItems.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-3">
-            {declaredItems.map((item, index) => (
-              <span 
-                key={index}
-                className="badge badge-slate"
-              >
-                {item}
-              </span>
-            ))}
+        <div className="card card-hover">
+          <div className="flex items-baseline justify-between gap-3 mb-3">
+            <h3 className="section-title">Cargo declaration</h3>
+            <span className="section-subtitle">Manifest PDF</span>
           </div>
-        )}
-        
-        <textarea
-          value={rawDeclarationText}
-          onChange={handleTextChange}
-          placeholder="e.g.&#10;Textiles&#10;Laptop batteries&#10;Kitchen tools"
-          className="w-full h-32 p-3 text-sm border border-slate-200 rounded-xl resize-none bg-white/80 focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-200"
-        />
-        
-        <p className="text-xs text-slate-500 mt-2">
-          Enter one item per line for manifest comparison
-        </p>
 
-        {/* PDF Upload + Extraction */}
-        <div className="mt-5 pt-5 border-t border-slate-200/70">
+          <p className="text-xs text-slate-500 mb-4">
+            Upload a manifest PDF. Items are extracted via the API and used for comparison.
+          </p>
+
+          {manifestItems.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-4">
+              {manifestItems.slice(0, 16).map((item, index) => (
+                <span key={`${item}-${index}`} className="badge badge-slate">
+                  {item}
+                </span>
+              ))}
+              {manifestItems.length > 16 && (
+                <span className="badge badge-slate">+{manifestItems.length - 16} more</span>
+              )}
+            </div>
+          )}
+
           <div className="flex items-center justify-between gap-3 mb-2">
             <div>
               <div className="text-sm font-semibold text-slate-900">Upload manifest PDF</div>
-              <div className="text-xs text-slate-500">
-                Extract objects/items and fill the declaration box.
-              </div>
+              <div className="text-xs text-slate-500">POST /api/manifest/extract</div>
             </div>
             {(manifestPdf || extractedItems.length > 0) && (
               <button type="button" className="btn-secondary px-3 py-2" onClick={clearPdf}>
@@ -176,26 +148,15 @@ const Sidebar = ({
               )}
 
               <div className="mt-4">
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <div className="text-xs font-semibold text-slate-700">
-                    Extracted items ({extractedCount})
-                  </div>
-                  <button
-                    type="button"
-                    className="btn-primary px-3 py-2 text-sm"
-                    onClick={applyExtractedToDeclaration}
-                    disabled={!extractedCount}
-                    title={!extractedCount ? 'Upload a PDF with detectable item text' : 'Fill the declaration box'}
-                  >
-                    Use extracted
-                  </button>
+                <div className="text-xs font-semibold text-slate-700 mb-2">
+                  Extracted items ({extractedCount})
                 </div>
 
                 <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
                   {extractedCount ? (
                     <div className="flex flex-wrap gap-2">
-                      {extractedPreview.map((item) => (
-                        <span key={item} className="badge badge-slate">
+                      {extractedPreview.map((item, idx) => (
+                        <span key={`${item}-${idx}`} className="badge badge-slate">
                           {item}
                         </span>
                       ))}
@@ -205,78 +166,26 @@ const Sidebar = ({
                         </span>
                       )}
                     </div>
-                  ) : (
-                    <div className="text-xs text-slate-500">
-                      Extracted items will appear here after upload.
-                    </div>
-                  )}
-                </div>
-
-                <div className="mt-2 text-xs text-slate-500">
-                  Current declared items: {declaredCount}
+                  ) : pdfStatus.state !== 'loading' && pdfStatus.state !== 'error' ? (
+                    <div className="text-xs text-slate-500">No items returned.</div>
+                  ) : null}
                 </div>
               </div>
             </div>
           )}
         </div>
-      </div>
 
-      {/* Reference Scan */}
-      <div className="card card-hover">
-        <div className="flex items-baseline justify-between gap-3 mb-3">
-          <h3 className="section-title">Reference scan</h3>
-          <span className="section-subtitle">Optional</span>
-        </div>
-        
-        {!referenceImages?.length ? (
-          <div className="border border-dashed border-slate-300/80 rounded-xl p-6 text-center hover:border-blue-300 hover:bg-blue-50/30 transition-colors">
-            <Upload className="w-8 h-8 mx-auto mb-2 text-slate-400" />
-            <label className="cursor-pointer">
-              <span className="text-sm text-slate-700 font-medium">Upload previous clean scan</span>
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                onChange={onReferenceUpload}
-                className="hidden"
-              />
-            </label>
-            <p className="mt-2 text-xs text-slate-500">
-              Compare against a known-good scan to spot changes.
-            </p>
+        <div className="card card-hover">
+          <div className="flex items-baseline justify-between gap-3 mb-3">
+            <h3 className="section-title">Reference scan</h3>
+            <span className="section-subtitle">Optional</span>
           </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-2">
-              {referenceImages.slice(0, 4).map((url, idx) => (
-                <div key={`${url}-${idx}`} className="relative">
-                  <img 
-                    src={url} 
-                    alt={`Reference scan ${idx + 1}`}
-                    className="w-full h-24 object-cover rounded-xl border border-slate-200 bg-slate-100"
-                  />
-                  <button
-                    onClick={() => onRemoveReference(idx)}
-                    className="absolute top-2 right-2 inline-flex items-center justify-center h-8 w-8 rounded-full bg-white/90 border border-slate-200 shadow-sm hover:bg-white"
-                    type="button"
-                    aria-label="Remove reference"
-                  >
-                    <X className="w-4 h-4 text-slate-700" />
-                  </button>
-                </div>
-              ))}
-            </div>
 
-            {referenceImages.length > 4 && (
-              <div className="text-xs text-slate-500">
-                +{referenceImages.length - 4} more reference image(s)
-              </div>
-            )}
-
-            <div className="flex items-center justify-between gap-3">
-              <label className="btn-secondary cursor-pointer px-3 py-2">
-                <Upload className="w-4 h-4" />
-                <span>Add more</span>
+          {!referenceImages?.length ? (
+            <div className="border border-dashed border-slate-300/80 rounded-xl p-6 text-center hover:border-blue-300 hover:bg-blue-50/30 transition-colors">
+              <Upload className="w-8 h-8 mx-auto mb-2 text-slate-400" />
+              <label className="cursor-pointer">
+                <span className="text-sm text-slate-700 font-medium">Upload previous clean scan</span>
                 <input
                   type="file"
                   accept="image/*"
@@ -285,13 +194,55 @@ const Sidebar = ({
                   className="hidden"
                 />
               </label>
-              <div className="text-xs text-slate-500">
-                Using first image for comparison
+              <p className="mt-2 text-xs text-slate-500">
+                Compare against a known-good scan to spot changes.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                {referenceImages.slice(0, 4).map((url, idx) => (
+                  <div key={`${url}-${idx}`} className="relative">
+                    <img
+                      src={url}
+                      alt={`Reference scan ${idx + 1}`}
+                      className="w-full h-24 object-cover rounded-xl border border-slate-200 bg-slate-100"
+                    />
+                    <button
+                      onClick={() => onRemoveReference(idx)}
+                      className="absolute top-2 right-2 inline-flex items-center justify-center h-8 w-8 rounded-full bg-white/90 border border-slate-200 shadow-sm hover:bg-white"
+                      type="button"
+                      aria-label="Remove reference"
+                    >
+                      <X className="w-4 h-4 text-slate-700" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {referenceImages.length > 4 && (
+                <div className="text-xs text-slate-500">
+                  +{referenceImages.length - 4} more reference image(s)
+                </div>
+              )}
+
+              <div className="flex items-center justify-between gap-3">
+                <label className="btn-secondary cursor-pointer px-3 py-2">
+                  <Upload className="w-4 h-4" />
+                  <span>Add more</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={onReferenceUpload}
+                    className="hidden"
+                  />
+                </label>
+                <div className="text-xs text-slate-500">Using first image for comparison</div>
               </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
       </div>
     </aside>
   );

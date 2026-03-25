@@ -9,7 +9,7 @@ import DetectionList from './components/DetectionList';
 import ManifestComparison from './components/ManifestComparison';
 import MetricsPanel from './components/MetricsPanel';
 import GradCamHeatmap from './components/GradCamHeatmap';
-import ImageComparison from './components/ImageComparison';
+import ScanHeatmapComparison from './components/ScanHeatmapComparison';
 import DownloadReport from './components/DownloadReport';
 import ResultsOutputs from './components/ResultsOutputs';
 import { useDetections } from './hooks/useDetections';
@@ -21,28 +21,22 @@ function App() {
 
   const [uploadedImages, setUploadedImages] = useState([]);
   const [referenceImages, setReferenceImages] = useState([]);
-  const [declaredItems, setDeclaredItems] = useState([]);
+  const [manifestItems, setManifestItems] = useState([]);
+  const [manifestPdfFile, setManifestPdfFile] = useState(null);
   const [selectedDetectionId, setSelectedDetectionId] = useState(null);
-  const [isOutputVisible, setIsOutputVisible] = useState(false);
-  
+
   const { analyze, isLoading, detections, risk, outputs, error, clearResults } = useDetections();
 
   const handleImagesSelect = (images) => {
     setUploadedImages(images);
     clearResults();
     setSelectedDetectionId(null);
-    setIsOutputVisible(false);
   };
 
   const handleClearImage = () => {
     setUploadedImages([]);
     setSelectedDetectionId(null);
     clearResults();
-    setIsOutputVisible(false);
-  };
-
-  const handleDeclarationChange = (text, items) => {
-    setDeclaredItems(items);
   };
 
   const handleReferenceUpload = (e) => {
@@ -67,8 +61,11 @@ function App() {
 
   const handleAnalyze = async () => {
     try {
-      await analyze(uploadedImages?.[0]?.file);
-      setIsOutputVisible(true);
+      await analyze({
+        file: uploadedImages?.[0]?.file,
+        reference: referenceImages?.[0]?.file,
+        manifest: manifestPdfFile ?? undefined,
+      });
     } catch (err) {
       console.error('Analysis failed:', err);
     }
@@ -77,6 +74,13 @@ function App() {
   const primaryUploaded = uploadedImages?.[0] ?? null;
   const primaryReference = referenceImages?.[0]?.url ?? null;
 
+  const gradcamUrl =
+    outputs?.gradcam ?? outputs?.gradCamImage ?? outputs?.grad_cam ?? null;
+  const highlightHeatmapPath =
+    outputs?.highlightHeatmap ?? outputs?.highlight_heatmap ?? null;
+  const outputHeatmapPath =
+    outputs?.outputHeatmap ?? outputs?.output_heatmap ?? null;
+
   const handleDetectionSelect = (detectionId) => {
     setSelectedDetectionId(detectionId === selectedDetectionId ? null : detectionId);
   };
@@ -84,212 +88,157 @@ function App() {
   return (
     <div className="app-shell">
       <Header />
-      
+
       <div className="container-page">
         <div className="flex flex-col gap-6 py-6 lg:flex-row">
           <Sidebar
-            declaredItems={declaredItems}
-            onDeclarationChange={handleDeclarationChange}
+            manifestItems={manifestItems}
+            onManifestItemsChange={setManifestItems}
+            onManifestFileChange={setManifestPdfFile}
             referenceImages={referenceImages.map((r) => r.url)}
             onReferenceUpload={handleReferenceUpload}
             onRemoveReference={handleRemoveReference}
           />
-          
+
           <main className="min-w-0 flex-1 space-y-6">
-          {/* Upload Section */}
-          <ImageUploader
-            selectedImages={uploadedImages}
-            onImagesSelect={handleImagesSelect}
-            onClearImage={handleClearImage}
-          />
-          
-          {/* Analyze Button */}
-          {!detections && (
-            <MotionDiv
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="text-center"
-            >
-              <button
-                onClick={handleAnalyze}
-                disabled={isLoading}
-                className="btn-primary w-full max-w-sm"
+            <ImageUploader
+              selectedImages={uploadedImages}
+              onImagesSelect={handleImagesSelect}
+              onClearImage={handleClearImage}
+            />
+
+            {!detections && (
+              <MotionDiv
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="text-center"
               >
-                {isLoading ? (
-                  <span className="inline-flex items-center justify-center gap-2">
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    AI analyzing…
-                  </span>
-                ) : primaryUploaded ? (
-                  'Analyze with AI'
-                ) : (
-                  'Run demo analysis'
+                <button
+                  onClick={handleAnalyze}
+                  disabled={isLoading}
+                  className="btn-primary w-full max-w-sm"
+                >
+                  {isLoading ? (
+                    <span className="inline-flex items-center justify-center gap-2">
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      AI analyzing…
+                    </span>
+                  ) : primaryUploaded ? (
+                    'Analyze with AI'
+                  ) : (
+                    'Run demo analysis'
+                  )}
+                </button>
+                {!primaryUploaded && (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Upload a scan to analyze real input. Demo runs with placeholder outputs.
+                  </p>
                 )}
-              </button>
-              {!primaryUploaded && (
-                <p className="mt-2 text-xs text-slate-500">
-                  Upload a scan to analyze real input. Demo runs with placeholder outputs.
+              </MotionDiv>
+            )}
+
+            {isLoading && (
+              <MotionDiv
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="text-center py-12"
+              >
+                <Loader2 className="w-12 h-12 animate-spin mx-auto mb-4 text-blue-600" />
+                <p className="text-lg font-medium text-gray-700">
+                  Analyzing X-ray scan with AI...
                 </p>
-              )}
-            </MotionDiv>
-          )}
-          
-          {/* Loading State */}
-          {isLoading && (
-            <MotionDiv
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-center py-12"
-            >
-              <Loader2 className="w-12 h-12 animate-spin mx-auto mb-4 text-blue-600" />
-              <p className="text-lg font-medium text-gray-700">
-                Analyzing X-ray scan with AI...
-              </p>
-              <p className="text-sm text-gray-500 mt-2">
-                This may take a few seconds
-              </p>
-            </MotionDiv>
-          )}
-          
-          {/* Analysis Results */}
-          {detections && (
-            <MotionDiv
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5 }}
-              className="space-y-6"
-            >
-              {/* View Output Button */}
-              {!isOutputVisible && (
-                <div className="card card-hover">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                    <div>
-                      <h3 className="section-title">Analysis completed</h3>
-                      <p className="section-subtitle">
-                        Click below to reveal the final output section.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn-primary w-full sm:w-auto"
-                      onClick={() => setIsOutputVisible(true)}
-                    >
-                      View output
-                    </button>
-                  </div>
-                </div>
-              )}
+                <p className="text-sm text-gray-500 mt-2">
+                  This may take a few seconds
+                </p>
+              </MotionDiv>
+            )}
 
-              {/* Final Output Section */}
-              {isOutputVisible && (
+            {detections && (
+              <MotionDiv
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5 }}
+                className="space-y-6"
+              >
                 <div className="space-y-6">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <div>
-                      <h2 className="text-xl font-semibold tracking-tight text-slate-900">
-                        Final output
-                      </h2>
-                      <p className="section-subtitle">
-                        Model images and object summary (arranged).
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => setIsOutputVisible(false)}
-                    >
-                      Hide
-                    </button>
+                  <div>
+                    <h2 className="text-xl font-semibold tracking-tight text-slate-900">
+                      Final output
+                    </h2>
+                    <p className="section-subtitle">Manifest-derived cargo list.</p>
                   </div>
 
-                  <ResultsOutputs
-                    outputs={outputs}
-                    fallbackGallery={
-                      primaryUploaded?.url
-                        ? uploadedImages.map((img) => img.url)
-                        : [heroImage, heroImage, heroImage]
-                    }
-                    fallbackObjects={primaryUploaded?.url ?? heroImage}
-                  />
+                  <ResultsOutputs outputs={outputs} manifestItems={manifestItems} />
                 </div>
-              )}
 
-              {/* Image Comparison */}
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                <div className="card card-hover">
-                  <div className="flex items-baseline justify-between gap-3 mb-4">
-                    <h3 className="section-title">Original scan</h3>
-                    <span className="section-subtitle">Uploaded image</span>
+                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                  <div className="card card-hover">
+                    <div className="flex items-baseline justify-between gap-3 mb-4">
+                      <h3 className="section-title">Original scan</h3>
+                      <span className="section-subtitle">Uploaded image</span>
+                    </div>
+                    <div className="overflow-hidden rounded-xl bg-slate-100 border border-slate-200/70">
+                      <img
+                        src={primaryUploaded?.url ?? heroImage}
+                        alt="Original X-ray scan"
+                        className="w-full h-auto"
+                      />
+                    </div>
                   </div>
-                  <div className="overflow-hidden rounded-xl bg-slate-100 border border-slate-200/70">
-                    <img 
-                      src={primaryUploaded?.url ?? heroImage} 
-                      alt="Original X-ray scan"
-                      className="w-full h-auto"
+
+                  <div className="card card-hover">
+                    <div className="flex items-baseline justify-between gap-3 mb-4">
+                      <h3 className="section-title">Detections</h3>
+                      <span className="section-subtitle">Annotated overlay</span>
+                    </div>
+                    <AnnotatedImage
+                      imageUrl={primaryUploaded?.url ?? heroImage}
+                      detections={detections}
+                      selectedDetectionId={selectedDetectionId}
                     />
                   </div>
                 </div>
-                
-                <div className="card card-hover">
-                  <div className="flex items-baseline justify-between gap-3 mb-4">
-                    <h3 className="section-title">Detections</h3>
-                    <span className="section-subtitle">Annotated overlay</span>
-                  </div>
-                  <AnnotatedImage
-                    imageUrl={primaryUploaded?.url ?? heroImage}
+
+                <GradCamHeatmap
+                  imageUrl={primaryUploaded?.url ?? heroImage}
+                  gradcamUrl={gradcamUrl}
+                />
+
+                <ScanHeatmapComparison
+                  referenceImageUrl={primaryReference}
+                  uploadImageUrl={primaryUploaded?.url ?? heroImage}
+                  highlightHeatmapPath={highlightHeatmapPath}
+                  outputHeatmapPath={outputHeatmapPath}
+                />
+
+                <RiskBadge level={risk?.level} score={risk?.score} reason={risk?.reason} />
+
+                <DetectionList
+                  detections={detections}
+                  onDetectionSelect={handleDetectionSelect}
+                  selectedDetectionId={selectedDetectionId}
+                />
+
+                <ManifestComparison manifestItems={manifestItems} detections={detections} />
+
+                <MetricsPanel />
+
+                <div className="text-center">
+                  <DownloadReport
                     detections={detections}
-                    selectedDetectionId={selectedDetectionId}
+                    risk={risk}
+                    manifestItems={manifestItems}
                   />
                 </div>
+              </MotionDiv>
+            )}
+
+            {error && (
+              <div className="card border-red-200 bg-red-50/60">
+                <h3 className="section-title text-red-900 mb-2">Analysis failed</h3>
+                <p className="text-red-700">{error}</p>
               </div>
-              
-              {/* GradCAM Heatmap */}
-              <GradCamHeatmap imageUrl={primaryUploaded?.url ?? heroImage} />
-              
-              {/* Reference Comparison (if reference uploaded) */}
-              {primaryReference && (
-                <ImageComparison
-                  currentImage={primaryUploaded?.url ?? heroImage}
-                  referenceImage={primaryReference}
-                />
-              )}
-              
-              {/* Risk Assessment */}
-              <RiskBadge level={risk?.level} score={risk?.score} reason={risk?.reason} />
-              
-              {/* Detection List */}
-              <DetectionList
-                detections={detections}
-                onDetectionSelect={handleDetectionSelect}
-                selectedDetectionId={selectedDetectionId}
-              />
-              
-              {/* Manifest Comparison */}
-              <ManifestComparison
-                declaredItems={declaredItems}
-                detections={detections}
-              />
-              
-              {/* Metrics Panel */}
-              <MetricsPanel />
-              
-              {/* Download Report */}
-              <div className="text-center">
-                <DownloadReport
-                  detections={detections}
-                  risk={risk}
-                  declaredItems={declaredItems}
-                />
-              </div>
-            </MotionDiv>
-          )}
-          
-          {/* Error State */}
-          {error && (
-            <div className="card border-red-200 bg-red-50/60">
-              <h3 className="section-title text-red-900 mb-2">Analysis failed</h3>
-              <p className="text-red-700">{error}</p>
-            </div>
-          )}
+            )}
           </main>
         </div>
       </div>
@@ -297,4 +246,4 @@ function App() {
   );
 }
 
-export default App
+export default App;

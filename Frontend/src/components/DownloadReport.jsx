@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Download, Loader2 } from 'lucide-react';
 
-const DownloadReport = ({ detections, risk, declaredItems }) => {
+const DownloadReport = ({ detections, risk, manifestItems }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isReady, setIsReady] = useState(false);
 
@@ -55,10 +55,10 @@ const DownloadReport = ({ detections, risk, declaredItems }) => {
       content += `\n`;
     }
     
-    if (declaredItems && declaredItems.length > 0) {
-      content += `DECLARED ITEMS\n`;
+    if (manifestItems && manifestItems.length > 0) {
+      content += `MANIFEST ITEMS\n`;
       content += `---------------\n`;
-      declaredItems.forEach((item, index) => {
+      manifestItems.forEach((item, index) => {
         content += `${index + 1}. ${item}\n`;
       });
       content += `\n`;
