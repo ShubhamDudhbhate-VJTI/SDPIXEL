@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html {
+    font-feature-settings: "ss01" 1, "cv11" 1;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+      Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  }
+}
+
+@layer components {
+  .app-shell {
+    @apply min-h-screen bg-gradient-to-b from-slate-50 via-white to-slate-50;
+  }
+
+  .container-page {
+    @apply mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8;
+  }
+
+  .card {
+    @apply rounded-2xl border border-slate-200/70 bg-white/90 p-6 shadow-[0_1px_2px_rgba(15,23,42,0.06)] backdrop-blur;
+  }
+
+  .card-hover {
+    @apply transition will-change-transform hover:-translate-y-[1px] hover:shadow-[0_16px_40px_rgba(15,23,42,0.08)];
+  }
+
+  .section-title {
+    @apply text-lg font-semibold tracking-tight text-slate-900;
+  }
+
+  .section-subtitle {
+    @apply text-sm text-slate-500;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 font-semibold text-white shadow-sm transition;
+    @apply hover:bg-blue-700 active:bg-blue-800;
+    @apply focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-200;
+    @apply disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 font-semibold text-slate-800 shadow-sm transition;
+    @apply hover:bg-slate-50 active:bg-slate-100;
+    @apply focus:outline-none focus-visible:ring-4 focus-visible:ring-slate-200;
+    @apply disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold;
+  }
+
+  .badge-solid {
+    @apply border-transparent text-white;
+  }
+
+  .badge-danger {
+    @apply border-red-200 bg-red-50 text-red-700;
+  }
+
+  .badge-warning {
+    @apply border-orange-200 bg-orange-50 text-orange-700;
+  }
+
+  .badge-success {
+    @apply border-emerald-200 bg-emerald-50 text-emerald-700;
+  }
+
+  .badge-slate {
+    @apply border-slate-200 bg-slate-50 text-slate-700;
+  }
+}
