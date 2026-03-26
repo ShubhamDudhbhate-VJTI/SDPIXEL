@@ -214,7 +214,10 @@ function App() {
 
                 <RiskBadge level={risk?.level} score={risk?.score} reason={risk?.reason} />
 
-                <ZeroShotOutput outputs={outputs} />
+                <ZeroShotOutput
+                  outputs={outputs}
+                  originalImageUrl={primaryUploaded?.url ?? heroImage}
+                />
 
                 <DetectionList
                   detections={detections}
@@ -228,9 +231,11 @@ function App() {
 
                 <div className="text-center">
                   <DownloadReport
+                    key={outputs?.zeroShot?.overlayImage ?? outputs?.gradcam ?? 'report'}
                     detections={detections}
                     risk={risk}
                     manifestItems={manifestItems}
+                    outputs={outputs}
                   />
                 </div>
               </MotionDiv>

@@ -41,16 +41,16 @@ export const useDetections = () => {
 
       return { detections: nextDetections, risk: nextRisk, outputs: nextOutputs };
     } catch (err) {
-      setDetections(DUMMY_DETECTIONS);
-      setRisk(DUMMY_RISK);
+      setDetections([]);
+      setRisk(null);
       setOutputs(null);
 
       const message =
         err?.message
-          ? `API error (showing demo data): ${err.message}`
-          : 'API error (showing demo data).';
+          ? `Analysis failed: ${err.message}`
+          : 'Analysis failed — check that the backend server is running.';
       setError(message);
-      return { detections: DUMMY_DETECTIONS, risk: DUMMY_RISK, outputs: null };
+      return { detections: [], risk: null, outputs: null };
     } finally {
       setIsLoading(false);
     }

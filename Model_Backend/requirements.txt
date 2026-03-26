@@ -1,12 +1,22 @@
-streamlit
+# ── Web server ──────────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# ── ML / inference ─────────────────────────────
 ultralytics
 opencv-python-headless
 Pillow
 numpy
-fpdf2
 torch
 torchvision
-matplotlib
 transformers>=4.35.0
-opencv-python>=4.8.0
+
+# ── PDF manifest extraction ────────────────────
+pdfplumber>=0.11.0
+fpdf2
+
+# ── Data / utilities ───────────────────────────
+matplotlib
 pandas>=2.0.0
+scikit-image>=0.22.0

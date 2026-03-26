@@ -182,22 +182,24 @@ const Sidebar = ({
           </div>
 
           {!referenceImages?.length ? (
-            <div className="border border-dashed border-slate-300/80 rounded-xl p-6 text-center hover:border-blue-300 hover:bg-blue-50/30 transition-colors">
+            <label
+              htmlFor="reference-upload"
+              className="block border border-dashed border-slate-300/80 rounded-xl p-6 text-center hover:border-blue-300 hover:bg-blue-50/30 transition-colors cursor-pointer"
+            >
               <Upload className="w-8 h-8 mx-auto mb-2 text-slate-400" />
-              <label className="cursor-pointer">
-                <span className="text-sm text-slate-700 font-medium">Upload previous clean scan</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={onReferenceUpload}
-                  className="hidden"
-                />
-              </label>
+              <span className="text-sm text-slate-700 font-medium block">Upload previous clean scan</span>
+              <input
+                id="reference-upload"
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={onReferenceUpload}
+                className="hidden"
+              />
               <p className="mt-2 text-xs text-slate-500">
                 Compare against a known-good scan to spot changes.
               </p>
-            </div>
+            </label>
           ) : (
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-2">

@@ -1,5 +1,33 @@
 import { resolveAssetUrl } from '../api/assets';
 
+/**
+ * Cell that renders a client-side image URL (data URL, blob URL, Vite asset path)
+ * directly — no resolveAssetUrl transformation.
+ */
+function ImageCell({ title, subtitle, url, emptyLabel }) {
+  return (
+    <div className="card card-hover">
+      <div className="flex items-baseline justify-between gap-3 mb-3">
+        <h4 className="text-sm font-semibold text-slate-800">{title}</h4>
+        {subtitle ? <span className="text-xs text-slate-500">{subtitle}</span> : null}
+      </div>
+      {url ? (
+        <div className="overflow-hidden rounded-xl bg-slate-100 border border-slate-200/70">
+          <img src={url} alt={title} className="w-full h-auto" />
+        </div>
+      ) : (
+        <div className="flex min-h-[140px] items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50/80 px-4 text-center text-xs text-slate-500">
+          {emptyLabel}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Cell that resolves a backend file path via resolveAssetUrl
+ * (e.g. "outputs/heatmap.png" → "/api/files?path=outputs%2Fheatmap.png").
+ */
 function HeatmapCell({ title, subtitle, url, emptyLabel }) {
   const src = url ? resolveAssetUrl(url) : null;
 
@@ -36,13 +64,13 @@ export default function ScanHeatmapComparison({
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <HeatmapCell
+        <ImageCell
           title="Reference scan"
           subtitle="First reference image"
           url={referenceImageUrl}
           emptyLabel="No reference scan uploaded. Add one in the sidebar."
         />
-        <HeatmapCell
+        <ImageCell
           title="Upload scan"
           subtitle="Current analysis image"
           url={uploadImageUrl}

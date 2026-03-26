@@ -1,8 +1,17 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { AlertTriangle, ShieldAlert, CheckCircle } from 'lucide-react';
 
 const AnnotatedImage = ({ imageUrl, detections, onDetectionHover, selectedDetectionId }) => {
   const [hoveredBox, setHoveredBox] = useState(null);
+  const [imgSize, setImgSize] = useState({ w: 1000, h: 800 });
+  const imgRef = useRef(null);
+
+  const handleImageLoad = useCallback(() => {
+    const img = imgRef.current;
+    if (img) {
+      setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
+    }
+  }, []);
 
   const getBoxColor = (category) => {
     switch (category) {
@@ -41,15 +50,17 @@ const AnnotatedImage = ({ imageUrl, detections, onDetectionHover, selectedDetect
     <div className="relative bg-slate-100 rounded-xl overflow-hidden border border-slate-200/70">
       {/* Base Image */}
       <img 
+        ref={imgRef}
         src={imageUrl} 
         alt="X-ray scan with detections"
         className="w-full h-auto"
+        onLoad={handleImageLoad}
       />
       
-      {/* SVG Overlay for Bounding Boxes */}
+      {/* SVG Overlay for Bounding Boxes — viewBox matches actual image pixels */}
       <svg 
         className="absolute inset-0 w-full h-full pointer-events-none"
-        viewBox="0 0 1000 800"
+        viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
         preserveAspectRatio="xMidYMid meet"
       >
         {detections?.map((detection) => {

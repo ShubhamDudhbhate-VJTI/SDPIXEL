@@ -8,6 +8,8 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
+        // Backend runs on port 8000 (see `Model_Backend/main.py` + uvicorn command).
+        // If VITE_API_PROXY_TARGET is set, it takes precedence.
         target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:8000',
         changeOrigin: true,
       },
