@@ -1,6 +1,6 @@
-# Pixel - Customs X-ray Intelligence Platform
+# CargoGuard - Customs X-ray Intelligence Platform
 
-Pixel is an AI-powered cargo screening platform that combines a modern React dashboard with a FastAPI inference backend to analyze customs X-ray scans.
+CargoGuard is an AI-powered cargo screening platform that combines a modern React dashboard with a FastAPI inference backend to analyze customs X-ray scans.
 
 It supports:
 - Object detection on X-ray scans (YOLOv8)
@@ -12,7 +12,7 @@ It supports:
 ## Project Structure
 
 ```text
-Pixel/
+CargoGuard/
 |- Frontend/                 # React + Vite web app
 |  |- src/
 |  |- package.json
@@ -67,8 +67,8 @@ Frontend supports:
 ### 1) Clone and enter project
 
 ```bash
-git clone https://github.com/AishVerse/Pixel.git
-cd Pixel
+git clone https://github.com/AishVerse/CargoGuard.git
+cd CargoGuard
 ```
 
 ### 2) Backend setup
@@ -98,7 +98,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 Open a second terminal:
 
 ```bash
-cd Pixel/Frontend
+cd CargoGuard/Frontend
 npm install
 npm run dev
 ```
