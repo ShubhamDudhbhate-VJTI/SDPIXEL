@@ -83,6 +83,8 @@ If `file` is omitted, the frontend still runs **demo mode** locally and does not
 | `highlightHeatmap` | `highlight_heatmap` | Highlighted / attention comparison image |
 | `outputHeatmap` | `output_heatmap` | Second heatmap for side-by-side comparison |
 | `manifestItems` | `manifest_items` | If present and non-empty, overrides sidebar-derived list in **Objects in cargo** |
+| `zeroShotOutputImage` | `zeroShotOutputImages`, `zero_shot_output_image`, `zero_shot_output_images` | Zero-shot model output image(s) served via `/api/files` |
+| `zeroShotOutputText` | `zero_shot_output_text` | Optional zero-shot model output text (rendered as monospaced block) |
 
 Paths under a safe directory (e.g. `outputs/...`) should be returned as strings; the browser loads them through **`GET /api/files?path=...`**.
 

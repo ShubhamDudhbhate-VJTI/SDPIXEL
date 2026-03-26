@@ -12,6 +12,7 @@ import GradCamHeatmap from './components/GradCamHeatmap';
 import ScanHeatmapComparison from './components/ScanHeatmapComparison';
 import DownloadReport from './components/DownloadReport';
 import ResultsOutputs from './components/ResultsOutputs';
+import ZeroShotOutput from './components/ZeroShotOutput';
 import { useDetections } from './hooks/useDetections';
 import { Loader2 } from 'lucide-react';
 import heroImage from './assets/hero.png';
@@ -212,6 +213,8 @@ function App() {
                 />
 
                 <RiskBadge level={risk?.level} score={risk?.score} reason={risk?.reason} />
+
+                <ZeroShotOutput outputs={outputs} />
 
                 <DetectionList
                   detections={detections}
