@@ -23,10 +23,17 @@ from __future__ import annotations
 
 import logging
 import time
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
+
+# Suppress harmless torch.classes instantiation warning
+warnings.filterwarnings(
+    "ignore",
+    message=".*Tried to instantiate class.*__path__._path.*",
+)
 
 import cv2
 import numpy as np
@@ -74,10 +81,29 @@ DEFAULT_SWEEP_QUERIES = [
     "a wire bundle",
 ]
 
-DEFAULT_BOX_THRESHOLD = 0.15
-DEFAULT_TEXT_THRESHOLD = 0.20
-DEFAULT_IOU_MATCH_THRESHOLD = 0.50
-DEFAULT_NMS_THRESHOLD = 0.45
+DEFAULT_BOX_THRESHOLD = 0.25
+DEFAULT_TEXT_THRESHOLD = 0.30
+DEFAULT_IOU_MATCH_THRESHOLD = 0.20
+DEFAULT_NMS_THRESHOLD = 0.30
+
+# Default manifest-style labels used when no manifest PDF is provided.
+# These are concrete cargo item categories for the per-label detection pass.
+DEFAULT_SCAN_LABELS = [
+    "electronics",
+    "laptop",
+    "phone",
+    "cables",
+    "clothing",
+    "shoes",
+    "food items",
+    "bottles",
+    "tools",
+    "weapons",
+    "drugs",
+    "metal objects",
+    "packages",
+    "documents",
+]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -149,17 +175,47 @@ class ZeroShotManifestInspector:
         sam_model_id: str = SAM_MODEL_ID,
         device: str | None = None,
     ) -> None:
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        # ── Device selection ────────────────────────────────────────────
+        # Priority: CUDA → MPS (Apple Silicon) → CPU
+        if device:
+            self.device = device
+        elif torch.cuda.is_available():
+            self.device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            self.device = "mps"
+            # Enable MPS fallback for ops not yet supported on Metal
+            import os
+            os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+        else:
+            self.device = "cpu"
 
         logger.info("Loading OWL-ViT v2 from %s …", owl_model_id)
         self.processor = Owlv2Processor.from_pretrained(owl_model_id)
-        self.owl_model = Owlv2ForObjectDetection.from_pretrained(owl_model_id).to(self.device)
+        try:
+            self.owl_model = Owlv2ForObjectDetection.from_pretrained(owl_model_id).to(self.device)
+        except Exception as exc:
+            logger.warning("Failed to load OWL-ViT on %s, falling back to CPU: %s", self.device, exc)
+            self.device = "cpu"
+            self.owl_model = Owlv2ForObjectDetection.from_pretrained(owl_model_id).to("cpu")
         self.owl_model.eval()
 
+        # SAM 2 — force CPU on MPS (SAM's mask decoder uses ops not
+        # supported on Metal: grid_sampler, some scatter ops, etc.)
         logger.info("Loading SAM 2 (%s) …", sam_model_id)
-        self.sam_model = SAM(sam_model_id)
+        if self.device == "mps":
+            logger.info("SAM 2 forced to CPU (MPS not fully supported for SAM)")
+            self.sam_model = SAM(sam_model_id)
+            # ultralytics SAM auto-selects device; override to CPU
+            if hasattr(self.sam_model, 'model') and hasattr(self.sam_model.model, 'to'):
+                try:
+                    self.sam_model.model.to("cpu")
+                except Exception:
+                    pass
+        else:
+            self.sam_model = SAM(sam_model_id)
 
-        logger.info("✓ Models loaded on device=%s", self.device)
+        logger.info("✓ Models loaded — OWL-ViT on %s, SAM on %s",
+                     self.device, "cpu" if self.device == "mps" else self.device)
 
     # ── Public API ──────────────────────────────────────────────────────
 
