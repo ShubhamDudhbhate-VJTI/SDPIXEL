@@ -15,6 +15,7 @@ Endpoints:
 """
 
 from __future__ import annotations
+from utils.shap_explainer import YOLOShapExplainer
 
 import logging
 import mimetypes
