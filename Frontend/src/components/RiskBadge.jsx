@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
+import ScoreRiskBadge from './ScoreRiskBadge';
 
-const RiskBadge = ({ level, score, reason }) => {
+const RiskBadge = ({ level, score, reason, risk }) => {
   const MotionDiv = motion.div;
 
   const getGradient = (level) => {
@@ -80,6 +81,16 @@ const RiskBadge = ({ level, score, reason }) => {
             {reason}
           </p>
         </div>
+      )}
+
+      {risk?.decision && (
+        <ScoreRiskBadge
+          decision={risk.decision}
+          final_risk={risk.final_risk}
+          visual_risk={risk.visual_risk}
+          data_risk={risk.data_risk}
+          risk_breakdown={risk.risk_breakdown}
+        />
       )}
     </div>
   );

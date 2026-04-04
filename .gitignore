@@ -35,3 +35,6 @@ Thumbs.db
 *.pt
 
 /.env
+
+Model_Backend/audit_logs/
+Model_Backend/outputs/
