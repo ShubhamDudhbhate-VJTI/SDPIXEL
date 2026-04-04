@@ -1,0 +1,136 @@
+{
+  "request_id": "8835abe6-84fd-42c7-a077-ddd8c649f572",
+  "timestamp": "2026-04-04T15:43:47.362878+00:00",
+  "steps": [
+    {
+      "service": "manifest_extraction",
+      "status": "success",
+      "timestamp": "2026-04-04T15:43:47.381969+00:00",
+      "input": {
+        "filename": "Plist.pdf"
+      },
+      "output": {
+        "item_count": 6,
+        "items": [
+          "Apple",
+          "Bike",
+          "Car",
+          "Books",
+          "Charger",
+          "Electronics wire"
+        ]
+      },
+      "latency": 0.0105
+    },
+    {
+      "service": "yolov8_detection",
+      "status": "success",
+      "timestamp": "2026-04-04T15:43:48.522777+00:00",
+      "input": {
+        "filename": "E2.jpg",
+        "image_size": [
+          612,
+          525
+        ]
+      },
+      "output": {
+        "detection_count": 0,
+        "labels": []
+      },
+      "latency": 1.1408,
+      "model_version": "model/best.pt"
+    },
+    {
+      "service": "risk_scoring",
+      "status": "success",
+      "timestamp": "2026-04-04T15:43:48.522833+00:00",
+      "input": {
+        "detection_count": 0
+      },
+      "output": {
+        "level": "CLEAR",
+        "score": 0
+      },
+      "latency": 0.0
+    },
+    {
+      "service": "gradcam_generation",
+      "status": "success",
+      "timestamp": "2026-04-04T15:43:50.636208+00:00",
+      "input": {
+        "image_size": [
+          612,
+          525
+        ]
+      },
+      "output": {
+        "output_path": "outputs/gradcam_1775317430_f47ef49a.png"
+      },
+      "latency": 2.1134
+    },
+    {
+      "service": "ssim_comparison",
+      "status": "success",
+      "timestamp": "2026-04-04T15:43:50.903194+00:00",
+      "input": {
+        "has_reference": true
+      },
+      "output": {
+        "ssim_score": 0.9829,
+        "interpretation": "similar",
+        "changed_regions": 3
+      },
+      "latency": 1.1408
+    },
+    {
+      "service": "shap_explainer",
+      "status": "skipped",
+      "timestamp": "2026-04-04T15:43:50.903519+00:00",
+      "output": {
+        "reason": "no detection or SHAP unavailable"
+      }
+    },
+    {
+      "service": "zero_shot_inspection",
+      "status": "success",
+      "timestamp": "2026-04-04T15:46:11.911978+00:00",
+      "input": {
+        "label_count": 6,
+        "labels": [
+          "Apple",
+          "Bike",
+          "Car",
+          "Books",
+          "Charger",
+          "Electronics wire"
+        ]
+      },
+      "output": {
+        "verdict": "CRITICAL: UNDECLARED ITEMS + MISSING DECLARED GOODS",
+        "total_objects": 13,
+        "declared_count": 5,
+        "undeclared_count": 8,
+        "missing_count": 4
+      },
+      "latency": 141.0084
+    },
+    {
+      "service": "composite_risk_scoring",
+      "status": "success",
+      "timestamp": "2026-04-04T15:46:11.912084+00:00",
+      "input": {
+        "suspicious_score": 0.0,
+        "uncertain_ratio": 0.6154,
+        "ssim_risk": 0.2,
+        "shap_intensity_score": null,
+        "data_risk": null
+      },
+      "output": {
+        "visual_risk": 0.1631,
+        "final_risk": 0.1631,
+        "decision": "GREEN"
+      }
+    }
+  ],
+  "final_status": "success"
+}

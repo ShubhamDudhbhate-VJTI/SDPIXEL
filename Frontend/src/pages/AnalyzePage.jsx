@@ -96,6 +96,14 @@ function AnalyzePage() {
   const primaryUploaded = uploadedImages?.[0] ?? null;
   const primaryReference = referenceImages?.[0]?.url ?? null;
 
+  // Stage 9: derive suspicious_flag from YOLO detections.
+  // True when any detected item is in the prohibited or suspicious category.
+  // Equivalent to the backend suspicious_flag field; derived client-side so
+  // no hook changes are needed.
+  const suspiciousFlag = Array.isArray(detections) && detections.some(
+    (d) => d.category === 'prohibited' || d.category === 'suspicious'
+  );
+
   const gradcamUrl =
     outputs?.gradcam ?? outputs?.gradCamImage ?? outputs?.grad_cam ?? null;
   const highlightHeatmapPath =
@@ -256,9 +264,14 @@ function AnalyzePage() {
                 outputHeatmapPath={outputHeatmapPath}
               />
 
-              <RiskBadge level={risk?.level} score={risk?.score} reason={risk?.reason} />
+              <RiskBadge level={risk?.level} score={risk?.score} reason={risk?.reason} risk={risk} />
 
-              <ZeroShotOutput outputs={outputs} originalImageUrl={primaryUploaded?.url ?? heroImage} />
+              {/* Stage 9: hide zero-shot detail when a suspicious/prohibited
+                  item was detected — officer attention should focus on YOLO
+                  bounding boxes and the SHAP heatmap instead. */}
+              {!suspiciousFlag && (
+                <ZeroShotOutput outputs={outputs} originalImageUrl={primaryUploaded?.url ?? heroImage} />
+              )}
 
               <DetectionList
                 detections={detections}

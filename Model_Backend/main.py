@@ -2,21 +2,24 @@
 main.py — FastAPI server for the Customs X-ray Intelligence Platform.
 
 Bridges the React frontend to the existing Python ML utilities:
-  - XRayDetector     (YOLOv8 object detection)
-  - generate_gradcam (pseudo Grad-CAM heatmap)
-  - calculate_risk   (risk scoring)
+  - XRayDetector              (YOLOv8 object detection)
+  - generate_gradcam          (pseudo Grad-CAM heatmap)
+  - calculate_risk            (legacy CLEAR/SUSPICIOUS/PROHIBITED scoring)
   - ZeroShotManifestInspector (OWL-ViT v2 + SAM 2)
   - draw_inspection_overlay   (annotated zero-shot image)
+  - compute_visual_risk       (Stage 6 composite visual risk)
+  - compute_final_risk        (Stage 7–8 final risk + RED/YELLOW/GREEN)
 
 Endpoints:
   POST /api/analyze           — run full pipeline on an uploaded X-ray scan
   POST /api/manifest/extract  — extract item list from a manifest PDF
   GET  /api/files?path=...    — serve generated output files
+  GET  /api/health            — health check
 """
 
 from __future__ import annotations
-from utils.shap_explainer import YOLOShapExplainer
 
+import asyncio
 import logging
 import mimetypes
 import os
@@ -56,6 +59,24 @@ from utils.zero_shot_inspector import (
     ZeroShotManifestInspector,
     draw_inspection_overlay,
 )
+from utils.visual_risk import compute_visual_risk, ssim_score_to_risk
+from utils.final_risk import compute_final_risk
+
+# ── SHAP explainer — optional, degrades gracefully ─────────────────────
+# shap_explainer.py contains module-level Colab execution code (files.upload,
+# hardcoded Colab paths) that raises NameError / FileNotFoundError outside
+# Google Colab.  We catch any import-time exception so the rest of the
+# pipeline continues; shap_intensity_score will be None in that case.
+try:
+    from utils.shap_explainer import YOLOShapExplainer
+    SHAP_AVAILABLE = True
+except Exception as _shap_import_err:
+    YOLOShapExplainer = None  # type: ignore[assignment, misc]
+    SHAP_AVAILABLE = False
+    logging.getLogger(__name__).warning(
+        "YOLOShapExplainer unavailable — shap_intensity_score will be None. "
+        "Reason: %s", _shap_import_err,
+    )
 
 # ── Configuration ───────────────────────────────────────────────────────
 
@@ -73,6 +94,7 @@ SUSPICIOUS_LABELS = {
     "baton", "plier", "hammer", "powerbank", "scissors",
     "wrench", "sprayer", "handcuffs", "lighter",
 }
+_ALL_THREAT_LABELS = PROHIBITED_LABELS | SUSPICIOUS_LABELS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -189,6 +211,52 @@ def _unique_output_path(name: str, ext: str = ".png") -> Path:
     return OUTPUT_DIR / filename
 
 
+def _run_ssim_sync(tmp_ref_path: str, image: Image.Image):
+    """
+    Open the reference image and compute SSIM comparison.
+    Runs in a thread pool via asyncio.to_thread() — must not call
+    async functions or use async context managers.
+    Returns a ComparisonResult or raises on failure.
+    """
+    ref_image = Image.open(tmp_ref_path).convert("RGB")
+    return compare_scans(image, ref_image)
+
+
+def _extract_shap_intensity(
+    detector: XRayDetector,
+    image: Image.Image,
+) -> Optional[float]:
+    """
+    Run the SHAP explainer and return a normalised intensity score in [0, 1].
+
+    Derivation: conclusion["high_attribution_coverage_pct"] / 100.0
+    (high_attribution_coverage_pct is the fraction of pixels above the SHAP
+    threshold, expressed as %; dividing by 100 gives a [0, 1] risk proxy.)
+
+    Returns None when:
+      - SHAP is unavailable (module failed to import)
+      - No detection was found in the image
+      - Any exception occurs during SHAP computation
+
+    Runs in a thread pool via asyncio.to_thread().
+    """
+    if not SHAP_AVAILABLE or YOLOShapExplainer is None:
+        return None
+    try:
+        explainer = YOLOShapExplainer(
+            detector,
+            suspicious_labels=_ALL_THREAT_LABELS,
+        )
+        result = explainer.explain(image, max_evals=100)
+        if result is None:
+            return None
+        _, _, _, conclusion = result
+        return min(conclusion["high_attribution_coverage_pct"] / 100.0, 1.0)
+    except Exception as exc:
+        logger.warning("SHAP explanation failed: %s", exc)
+        return None
+
+
 # ── Endpoint: POST /api/analyze ────────────────────────────────────────
 
 
@@ -202,7 +270,17 @@ async def analyze(
     """
     Run the full analysis pipeline on an uploaded X-ray scan image.
 
-    Returns {detections, risk, outputs} matching the frontend contract.
+    Pipeline:
+      Stage 1  : YOLO detection + SSIM comparison (parallel via asyncio.gather)
+      Stage 2  : Legacy risk scoring (CLEAR / SUSPICIOUS / PROHIBITED)
+      Stage 3  : Grad-CAM heatmap
+      Stage 3b : SSIM result processing (save heatmap images)
+      Stage 3c : SHAP intensity score
+      Stage 4  : Zero-shot inspection
+      Stage 5–8: Composite risk (visual_risk → final_risk → RED/YELLOW/GREEN)
+
+    Returns {detections, risk, outputs, suspicious_flag, request_id}
+    matching the full frontend contract.
     """
     # --- Validate ---
     if file.content_type and not file.content_type.startswith("image/"):
@@ -239,11 +317,45 @@ async def analyze(
                 latency=time.time() - t0,
             )
 
-        # --- 1. YOLOv8 detection ---
+        # ── Stage 1: YOLO detection + SSIM comparison (parallel) ────
+        #
+        # Both are CPU-bound and independent — run them concurrently in the
+        # default thread pool so they don't block each other on the GIL
+        # (YOLO/PyTorch releases the GIL during inference; OpenCV operations
+        # inside SSIM also release the GIL for most calls).
         detector = get_detector()
-        t0 = time.time()
-        raw_detections = detector.detect(image)
-        detection_latency = time.time() - t0
+        parallel_t0 = time.time()
+
+        if tmp_ref_path is not None:
+            yolo_task = asyncio.to_thread(detector.detect, image)
+            ssim_task = asyncio.to_thread(_run_ssim_sync, str(tmp_ref_path), image)
+
+            yolo_outcome, ssim_outcome = await asyncio.gather(
+                yolo_task, ssim_task, return_exceptions=True
+            )
+
+            # YOLO failure is fatal for the whole request
+            if isinstance(yolo_outcome, Exception):
+                raise yolo_outcome
+
+            raw_detections: list[dict] = yolo_outcome
+
+            # SSIM failure is non-fatal — log and continue without comparison
+            if isinstance(ssim_outcome, Exception):
+                logger.warning("SSIM parallel task failed: %s", ssim_outcome)
+                audit.log_step(
+                    service="ssim_comparison",
+                    status="failed",
+                    error=str(ssim_outcome),
+                )
+                ssim_result = None
+            else:
+                ssim_result = ssim_outcome
+        else:
+            raw_detections = await asyncio.to_thread(detector.detect, image)
+            ssim_result = None
+
+        parallel_wall = time.time() - parallel_t0
         detections = _transform_detections(raw_detections)
 
         audit.log_step(
@@ -254,11 +366,11 @@ async def analyze(
                 "detection_count": len(detections),
                 "labels": [d["label"] for d in detections],
             },
-            latency=detection_latency,
+            latency=parallel_wall,
             model_version=MODEL_PATH,
         )
 
-        # --- 2. Risk scoring ---
+        # ── Stage 2: Legacy risk scoring (CLEAR / SUSPICIOUS / PROHIBITED) ──
         t0 = time.time()
         risk = calculate_risk(raw_detections)
         audit.log_step(
@@ -269,16 +381,14 @@ async def analyze(
             latency=time.time() - t0,
         )
 
-        # --- 3. Grad-CAM heatmap + highlight/output heatmaps ---
+        # ── Stage 3: Grad-CAM heatmap ────────────────────────────────
         outputs: dict = {}
         try:
             t0 = time.time()
-            # Generate the blended overlay (60% original + 40% heatmap)
-            gradcam_image = generate_gradcam(MODEL_PATH, image)
+            gradcam_image = await asyncio.to_thread(generate_gradcam, MODEL_PATH, image)
             gradcam_path = _unique_output_path("gradcam")
             gradcam_image.save(str(gradcam_path))
             outputs["gradcam"] = str(gradcam_path.relative_to(OUTPUT_DIR.parent))
-
             audit.log_step(
                 service="gradcam_generation",
                 status="success",
@@ -294,16 +404,15 @@ async def analyze(
                 error=str(exc),
             )
 
-        # --- 3b. SSIM image comparison (when reference scan is provided) ---
-        if tmp_ref_path is not None:
+        # ── Stage 3b: Process SSIM result (computed in parallel above) ──
+        #
+        # Computation already happened; this stage only saves the output
+        # images and stores metadata — no heavy work.
+        ssim_score: Optional[float] = None
+        if ssim_result is not None:
             try:
-                t0 = time.time()
-                ref_image = Image.open(str(tmp_ref_path)).convert("RGB")
-                comparison = compare_scans(image, ref_image)
-
-                # highlightHeatmap — current scan with red boxes on changed regions
                 highlighted_rgb = cv2.cvtColor(
-                    comparison.highlighted_image, cv2.COLOR_BGR2RGB
+                    ssim_result.highlighted_image, cv2.COLOR_BGR2RGB
                 )
                 highlight_path = _unique_output_path("highlight_heatmap")
                 Image.fromarray(highlighted_rgb).save(str(highlight_path))
@@ -311,9 +420,8 @@ async def analyze(
                     highlight_path.relative_to(OUTPUT_DIR.parent)
                 )
 
-                # outputHeatmap — JET-colorized SSIM difference map
                 heatmap_rgb = cv2.cvtColor(
-                    comparison.ssim_heatmap, cv2.COLOR_BGR2RGB
+                    ssim_result.ssim_heatmap, cv2.COLOR_BGR2RGB
                 )
                 output_heatmap_path = _unique_output_path("output_heatmap")
                 Image.fromarray(heatmap_rgb).save(str(output_heatmap_path))
@@ -321,53 +429,86 @@ async def analyze(
                     output_heatmap_path.relative_to(OUTPUT_DIR.parent)
                 )
 
-                # Include SSIM metadata
-                outputs["ssimScore"] = comparison.ssim_score
-                outputs["ssimInterpretation"] = comparison.interpretation
-                outputs["changedRegions"] = len(comparison.changed_regions)
+                ssim_score = ssim_result.ssim_score
+                outputs["ssimScore"] = ssim_score
+                outputs["ssimInterpretation"] = ssim_result.interpretation
+                outputs["changedRegions"] = len(ssim_result.changed_regions)
 
                 logger.info(
                     "SSIM comparison: score=%.4f, regions=%d, verdict=%s",
-                    comparison.ssim_score,
-                    len(comparison.changed_regions),
-                    comparison.interpretation,
+                    ssim_score,
+                    len(ssim_result.changed_regions),
+                    ssim_result.interpretation,
                 )
-
                 audit.log_step(
                     service="ssim_comparison",
                     status="success",
                     input_data={"has_reference": True},
                     output_data={
-                        "ssim_score": comparison.ssim_score,
-                        "interpretation": comparison.interpretation,
-                        "changed_regions": len(comparison.changed_regions),
+                        "ssim_score": ssim_score,
+                        "interpretation": ssim_result.interpretation,
+                        "changed_regions": len(ssim_result.changed_regions),
                     },
-                    latency=time.time() - t0,
+                    # Latency already captured as part of the parallel wall time
+                    latency=parallel_wall,
                 )
             except Exception as exc:
-                logger.warning("SSIM comparison failed: %s", exc)
+                logger.warning("SSIM result processing failed: %s", exc)
                 audit.log_step(
                     service="ssim_comparison",
                     status="failed",
                     error=str(exc),
                 )
 
-        # --- 4. Zero-shot inspection (always runs if enabled) ---
+        # ── Stage 3c: SHAP intensity score ───────────────────────────
+        #
+        # Runs in a thread to avoid blocking the event loop.
+        # Returns None when SHAP is unavailable or no detection is found.
+        # visual_risk.py handles None gracefully (redistributes weight).
+        shap_intensity_score: Optional[float] = None
+        try:
+            t0 = time.time()
+            shap_intensity_score = await asyncio.to_thread(
+                _extract_shap_intensity, detector, image
+            )
+            if shap_intensity_score is not None:
+                outputs["shapIntensityScore"] = shap_intensity_score
+                audit.log_step(
+                    service="shap_explainer",
+                    status="success",
+                    input_data={"image_size": list(image.size)},
+                    output_data={"shap_intensity_score": shap_intensity_score},
+                    latency=time.time() - t0,
+                )
+            else:
+                audit.log_step(
+                    service="shap_explainer",
+                    status="skipped",
+                    output_data={"reason": "no detection or SHAP unavailable"},
+                )
+        except Exception as exc:
+            logger.warning("SHAP step failed: %s", exc)
+            audit.log_step(
+                service="shap_explainer",
+                status="failed",
+                error=str(exc),
+            )
+
+        # ── Stage 4: Zero-shot inspection (always runs if enabled) ───
         inspector = get_zero_shot()
         if inspector is not None:
             try:
                 t0 = time.time()
-                # Use manifest items if available, otherwise default scan labels
                 zs_labels = manifest_items if manifest_items else list(DEFAULT_SCAN_LABELS)
-                inspection = inspector.inspect(str(tmp_path), zs_labels)
+                inspection = await asyncio.to_thread(
+                    inspector.inspect, str(tmp_path), zs_labels
+                )
 
-                # Save annotated overlay image
                 image_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
                 overlay = draw_inspection_overlay(image_bgr, inspection)
                 overlay_path = _unique_output_path("zero_shot")
                 cv2.imwrite(str(overlay_path), overlay)
 
-                # Build structured zero-shot response
                 outputs["zeroShot"] = {
                     "overlayImage": str(
                         overlay_path.relative_to(OUTPUT_DIR.parent)
@@ -417,22 +558,105 @@ async def analyze(
                     error=str(exc),
                 )
 
-        # --- 5. Include manifest items in outputs if available ---
+        # ── Stage 5: Include manifest items in outputs if available ──
         if manifest_items:
             outputs["manifestItems"] = manifest_items
 
+        # ── Stages 6–8: Composite risk scoring ───────────────────────
+        #
+        # Derive all inputs from the model outputs already computed above,
+        # then call the new risk utils (no model I/O here).
+
+        # suspicious_score — 1.0 if any YOLO-detected label is in the
+        # combined threat set (prohibited ∪ suspicious), else 0.0
+        detected_labels_lower = {d["label"].strip().lower() for d in raw_detections}
+        suspicious_score = 1.0 if detected_labels_lower & _ALL_THREAT_LABELS else 0.0
+        suspicious_flag = suspicious_score == 1.0
+
+        # uncertain_ratio — from zero-shot: undeclared items / total detected.
+        # Defaults to 0.0 when zero-shot did not run or found nothing.
+        zs = outputs.get("zeroShot", {})
+        total_objects = zs.get("totalObjects", 0)
+        undeclared_count = zs.get("undeclaredCount", 0)
+        uncertain_ratio = (
+            undeclared_count / total_objects if total_objects > 0 else 0.0
+        )
+
+        # ssim_risk — convert the raw SSIM similarity score to a risk bucket.
+        # ssim_score is None when no reference scan was uploaded.
+        ssim_risk = ssim_score_to_risk(ssim_score)
+        outputs["ssimRisk"] = ssim_risk
+
+        # Stage 6: Visual risk
+        visual_risk = compute_visual_risk(
+            suspicious_score=suspicious_score,
+            uncertain_ratio=uncertain_ratio,
+            ssim_risk=ssim_risk,
+            shap_intensity_score=shap_intensity_score,
+        )
+
+        # Stage 7–8: Data risk + final risk
+        # data_risk is None until llm_extractor.py is wired in (Step 5).
+        # compute_final_risk() handles None gracefully: final_risk = visual_risk.
+        # TODO: replace None with compute_data_risk() output after Step 7.
+        data_risk: Optional[float] = None
+        final_risk, decision = compute_final_risk(data_risk, visual_risk)
+
+        audit.log_step(
+            service="composite_risk_scoring",
+            status="success",
+            input_data={
+                "suspicious_score": suspicious_score,
+                "uncertain_ratio": round(uncertain_ratio, 4),
+                "ssim_risk": round(ssim_risk, 4),
+                "shap_intensity_score": shap_intensity_score,
+                "data_risk": data_risk,
+            },
+            output_data={
+                "visual_risk": round(visual_risk, 4),
+                "final_risk": final_risk,
+                "decision": decision,
+            },
+        )
+
+        # Augment the existing risk dict — all original fields (level, score,
+        # reason, flags) are preserved; new fields are added alongside them.
+        risk.update({
+            "data_risk": data_risk,
+            "visual_risk": round(visual_risk, 4),
+            "final_risk": final_risk,
+            "decision": decision,
+            "risk_breakdown": {
+                "suspicious_score": suspicious_score,
+                "uncertain_ratio": round(uncertain_ratio, 4),
+                "ssim_risk": round(ssim_risk, 4),
+                "shap_intensity_score": shap_intensity_score,
+                # Populated once llm_extractor.py is wired in
+                "value_anomaly": None,
+                "hs_code_risk": None,
+                "country_risk": None,
+            },
+        })
+
         # ── Audit: finalize and save ────────────────────────────────
         audit_json = audit.finalize("success")
-        logger.info("✓ Audit saved: request_id=%s, steps=%d", audit.request_id, len(audit.steps))
+        logger.info(
+            "✓ Audit saved: request_id=%s, steps=%d",
+            audit.request_id,
+            len(audit.steps),
+        )
 
         # ── IPFS: upload audit JSON in background ─────────────────────
         if background_tasks is not None:
-            background_tasks.add_task(_upload_audit_to_ipfs, audit_json, audit.request_id)
+            background_tasks.add_task(
+                _upload_audit_to_ipfs, audit_json, audit.request_id
+            )
 
         return {
             "detections": detections,
             "risk": risk,
             "outputs": outputs if outputs else None,
+            "suspicious_flag": suspicious_flag,
             "request_id": audit.request_id,
         }
 
@@ -450,20 +674,14 @@ def _upload_audit_to_ipfs(audit_json: dict, request_id: str) -> None:
     """Background task: upload audit to IPFS, then store CID in Supabase."""
     cid = None
     try:
-        # Encrypt the audit dictionary before uploading it to public IPFS
         encrypted_string = encrypt_data(audit_json)
-        
-        # Package it so it's still technically a valid JSON object structure for Pinata, 
-        # but the content is just an encrypted string.
         secure_payload = {"encrypted_payload": encrypted_string}
-        
         cid = upload_to_ipfs(secure_payload, name=request_id)
         logger.info("✓ IPFS upload complete: request_id=%s, CID=%s", request_id, cid)
     except Exception as exc:
         logger.error("✗ IPFS upload failed for request_id=%s: %s", request_id, exc)
         return
 
-    # Store CID + metadata in Supabase
     try:
         status = audit_json.get("final_status", "success")
         step_names = [s.get("service", "") for s in audit_json.get("steps", [])]
@@ -476,7 +694,9 @@ def _upload_audit_to_ipfs(audit_json: dict, request_id: str) -> None:
         )
         logger.info("✓ Supabase metadata stored: request_id=%s", request_id)
     except Exception as exc:
-        logger.error("✗ Supabase insert failed for request_id=%s: %s", request_id, exc)
+        logger.error(
+            "✗ Supabase insert failed for request_id=%s: %s", request_id, exc
+        )
 
 
 # ── Endpoint: Audits ───────────────────────────────────────────────────
@@ -572,8 +792,6 @@ def _extract_items_from_pdf(pdf_path: Path) -> list[str]:
             if not full_text.strip():
                 return []
 
-            # Heuristic: each non-empty line that looks like an item name
-            # Skip lines that look like headers, totals, or metadata
             skip_prefixes = (
                 "total", "subtotal", "page", "date", "invoice",
                 "bill", "shipping", "consignee", "shipper",
@@ -589,7 +807,6 @@ def _extract_items_from_pdf(pdf_path: Path) -> list[str]:
                 lower = cleaned.lower()
                 if any(lower.startswith(prefix) for prefix in skip_prefixes):
                     continue
-                # Skip lines that are purely numeric or very short codes
                 if cleaned.replace(".", "").replace(",", "").replace(" ", "").isdigit():
                     continue
                 items.append(cleaned)
@@ -634,14 +851,12 @@ def serve_file(path: str = Query(..., description="Relative path to the file")):
     Security: only allows files under OUTPUT_DIR's parent directory.
     Blocks path traversal (.. and absolute paths).
     """
-    # Basic traversal prevention
     if ".." in path or path.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid path")
 
     candidate = Path(path).as_posix().lstrip("/")
     full_path = (OUTPUT_DIR.parent / candidate).resolve()
 
-    # Ensure the resolved path is within the allowed root
     allowed_root = OUTPUT_DIR.parent.resolve()
     if allowed_root not in full_path.parents and full_path != allowed_root:
         raise HTTPException(status_code=400, detail="Path outside allowed directory")
@@ -664,4 +879,5 @@ def health():
         "model_path": MODEL_PATH,
         "output_dir": str(OUTPUT_DIR),
         "zero_shot_enabled": ENABLE_ZERO_SHOT,
+        "shap_available": SHAP_AVAILABLE,
     }

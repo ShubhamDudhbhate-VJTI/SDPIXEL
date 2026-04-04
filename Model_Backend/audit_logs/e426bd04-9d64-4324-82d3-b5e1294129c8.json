@@ -1,0 +1,124 @@
+{
+  "request_id": "e426bd04-9d64-4324-82d3-b5e1294129c8",
+  "timestamp": "2026-04-04T15:40:05.470913+00:00",
+  "steps": [
+    {
+      "service": "yolov8_detection",
+      "status": "success",
+      "timestamp": "2026-04-04T15:40:07.065409+00:00",
+      "input": {
+        "filename": "E2.jpg",
+        "image_size": [
+          612,
+          525
+        ]
+      },
+      "output": {
+        "detection_count": 0,
+        "labels": []
+      },
+      "latency": 1.5668,
+      "model_version": "model/best.pt"
+    },
+    {
+      "service": "risk_scoring",
+      "status": "success",
+      "timestamp": "2026-04-04T15:40:07.065451+00:00",
+      "input": {
+        "detection_count": 0
+      },
+      "output": {
+        "level": "CLEAR",
+        "score": 0
+      },
+      "latency": 0.0
+    },
+    {
+      "service": "gradcam_generation",
+      "status": "success",
+      "timestamp": "2026-04-04T15:40:08.354744+00:00",
+      "input": {
+        "image_size": [
+          612,
+          525
+        ]
+      },
+      "output": {
+        "output_path": "outputs/gradcam_1775317208_82601173.png"
+      },
+      "latency": 1.2893
+    },
+    {
+      "service": "ssim_comparison",
+      "status": "success",
+      "timestamp": "2026-04-04T15:40:08.623604+00:00",
+      "input": {
+        "has_reference": true
+      },
+      "output": {
+        "ssim_score": 0.9829,
+        "interpretation": "similar",
+        "changed_regions": 3
+      },
+      "latency": 1.5668
+    },
+    {
+      "service": "shap_explainer",
+      "status": "skipped",
+      "timestamp": "2026-04-04T15:40:08.624201+00:00",
+      "output": {
+        "reason": "no detection or SHAP unavailable"
+      }
+    },
+    {
+      "service": "zero_shot_inspection",
+      "status": "success",
+      "timestamp": "2026-04-04T15:43:42.614061+00:00",
+      "input": {
+        "label_count": 14,
+        "labels": [
+          "electronics",
+          "laptop",
+          "phone",
+          "cables",
+          "clothing",
+          "shoes",
+          "food items",
+          "bottles",
+          "tools",
+          "weapons",
+          "drugs",
+          "metal objects",
+          "packages",
+          "documents"
+        ]
+      },
+      "output": {
+        "verdict": "SUSPICIOUS: MISSING DECLARED GOODS — REQUIRES HUMAN INSPECTION",
+        "total_objects": 18,
+        "declared_count": 18,
+        "undeclared_count": 0,
+        "missing_count": 9
+      },
+      "latency": 213.9892
+    },
+    {
+      "service": "composite_risk_scoring",
+      "status": "success",
+      "timestamp": "2026-04-04T15:43:42.616577+00:00",
+      "input": {
+        "suspicious_score": 0.0,
+        "uncertain_ratio": 0.0,
+        "ssim_risk": 0.2,
+        "shap_intensity_score": null,
+        "data_risk": null
+      },
+      "output": {
+        "visual_risk": 0.04,
+        "final_risk": 0.04,
+        "decision": "GREEN"
+      }
+    }
+  ],
+  "final_status": "success"
+}
