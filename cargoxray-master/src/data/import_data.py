@@ -8,7 +8,7 @@ if __name__ == '__main__':
                         categories_json_path='data/categories.json.gz')
 
     dataset.import_data(
-        import_dir='/raid/ruslan_bazhenov/macbook'
+        import_dir=''
     )
 
     dataset.apply_changes()
