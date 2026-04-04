@@ -81,6 +81,7 @@ function AnalyzePage() {
         const id = generateTransactionId();
         saveTransaction({
           id,
+          requestId: result.request_id ?? null,
           demo: !uploadedImages?.[0]?.file,
           fileName: uploadedImages?.[0]?.file?.name ?? null,
           manifestItemCount: manifestItems.length,

@@ -953,6 +953,29 @@ def _upload_audit_to_ipfs(audit_json: dict, request_id: str) -> None:
 
 # ── Endpoint: Audits ───────────────────────────────────────────────────
 
+@app.get("/api/audit/detail/{request_id}")
+async def get_audit_detail_from_disk(request_id: str):
+    """
+    Read a full audit trail JSON from disk (audit_logs/{request_id}.json).
+    This is the primary endpoint for the frontend HistoryPage.
+    """
+    import json as _json
+    from utils.audit import AUDIT_LOG_DIR
+
+    # Sanitise: only allow UUID-like strings to prevent path traversal
+    safe_id = request_id.replace("..", "").replace("/", "").replace("\\", "")
+    audit_file = AUDIT_LOG_DIR / f"{safe_id}.json"
+
+    if not audit_file.exists() or not audit_file.is_file():
+        raise HTTPException(status_code=404, detail=f"No audit log found for request_id: {request_id}")
+
+    try:
+        audit_data = _json.loads(audit_file.read_text(encoding="utf-8"))
+        return {"audit": audit_data}
+    except Exception as exc:
+        logger.error("Failed to read audit file %s: %s", audit_file, exc)
+        raise HTTPException(status_code=500, detail="Failed to read audit log file")
+
 @app.get("/api/audit/logs")
 async def get_all_audits(limit: Optional[int] = Query(None, description="Max logs to return (leave blank for all)"), date_filter: Optional[str] = Query(None, description="Filter by date in DD-MM-YYYY format (e.g. 04-04-2026)")):
     """Fetch a list of all audit metadata from Supabase, optionally filtered by date."""

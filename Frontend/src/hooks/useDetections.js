@@ -49,6 +49,7 @@ export const useDetections = () => {
         detections: nextDetections,
         risk: nextRisk,
         outputs: nextOutputs,
+        request_id: data?.request_id ?? null,
       };
     } catch (err) {
       setDetections([]);
