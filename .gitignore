@@ -33,3 +33,5 @@ Thumbs.db
 
 # Models (already included)
 *.pt
+
+/.env
