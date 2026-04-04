@@ -97,7 +97,7 @@ const DetectionList = ({ detections, onDetectionSelect, selectedDetectionId }) =
               transition={{ delay: index * 0.1 }}
               className={`flex items-center gap-4 p-4 rounded-lg border-2 cursor-pointer transition-all ${
                 isSelected 
-                  ? 'border-blue-300 bg-blue-50/40' 
+                  ? 'border-teal-400 bg-teal-50/45' 
                   : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
               }`}
               onClick={() => onDetectionSelect?.(detection.id)}

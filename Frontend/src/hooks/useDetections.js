@@ -23,7 +23,12 @@ export const useDetections = () => {
         setDetections(DUMMY_DETECTIONS);
         setRisk(DUMMY_RISK);
         setOutputs(null);
-        return { detections: DUMMY_DETECTIONS, risk: DUMMY_RISK, outputs: null };
+        return {
+          ok: true,
+          detections: DUMMY_DETECTIONS,
+          risk: DUMMY_RISK,
+          outputs: null,
+        };
       }
 
       const data = await analyzeScan({
@@ -39,7 +44,12 @@ export const useDetections = () => {
       setRisk(nextRisk);
       setOutputs(nextOutputs);
 
-      return { detections: nextDetections, risk: nextRisk, outputs: nextOutputs };
+      return {
+        ok: true,
+        detections: nextDetections,
+        risk: nextRisk,
+        outputs: nextOutputs,
+      };
     } catch (err) {
       setDetections([]);
       setRisk(null);
@@ -50,7 +60,7 @@ export const useDetections = () => {
           ? `Analysis failed: ${err.message}`
           : 'Analysis failed — check that the backend server is running.';
       setError(message);
-      return { detections: [], risk: null, outputs: null };
+      return { ok: false, detections: [], risk: null, outputs: null };
     } finally {
       setIsLoading(false);
     }

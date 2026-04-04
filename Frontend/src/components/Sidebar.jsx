@@ -101,7 +101,7 @@ const Sidebar = ({
           </div>
 
           {!manifestPdf ? (
-            <div className="border border-dashed border-slate-300/80 rounded-xl p-4 text-center hover:border-blue-300 hover:bg-blue-50/20 transition-colors">
+            <div className="border border-dashed border-slate-300/80 rounded-xl p-4 text-center transition-all duration-300 hover:border-teal-300 hover:bg-teal-50/25">
               <label className="cursor-pointer block">
                 <input
                   type="file"
@@ -109,8 +109,8 @@ const Sidebar = ({
                   onChange={handlePdfUpload}
                   className="hidden"
                 />
-                <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-600/10 border border-blue-200/50">
-                  <FileText className="w-5 h-5 text-blue-700" />
+                <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-2xl border border-teal-200/60 bg-teal-600/10">
+                  <FileText className="w-5 h-5 text-teal-700" />
                 </div>
                 <div className="text-sm font-semibold text-slate-900">Click to upload PDF</div>
                 <div className="text-xs text-slate-500 mt-1">Max 15MB</div>
@@ -184,7 +184,7 @@ const Sidebar = ({
           {!referenceImages?.length ? (
             <label
               htmlFor="reference-upload"
-              className="block border border-dashed border-slate-300/80 rounded-xl p-6 text-center hover:border-blue-300 hover:bg-blue-50/30 transition-colors cursor-pointer"
+              className="block cursor-pointer rounded-xl border border-dashed border-slate-300/80 p-6 text-center transition-all duration-300 hover:border-teal-300 hover:bg-teal-50/30"
             >
               <Upload className="w-8 h-8 mx-auto mb-2 text-slate-400" />
               <span className="text-sm text-slate-700 font-medium block">Upload previous clean scan</span>
