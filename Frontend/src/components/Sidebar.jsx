@@ -71,7 +71,7 @@ const Sidebar = ({
           </div>
 
           <p className="text-xs text-slate-500 mb-4">
-            Upload a manifest PDF. Items are extracted via the API and used for comparison.
+            Upload a manifest PDF. Items are extracted from this PDF and used for comparison.
           </p>
 
           {manifestItems.length > 0 && (

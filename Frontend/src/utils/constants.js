@@ -60,5 +60,5 @@ export const MODEL_METRICS = {
   "Precision": 0.933,
   "Recall": 0.862,
   "Model": "YOLOv8m",
-  "Dataset": "CargoXray"
+  "Dataset": "PIXray Partial Sixray"
 };
