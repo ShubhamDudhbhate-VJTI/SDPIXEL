@@ -1,6 +1,6 @@
 import requests
 
-url = "https://abcd1234.ngrok-free.app/analyze"
+url = "https://anthropographic-similarly-darleen.ngrok-free.dev/"
 
 files = {
     "file": open("test_images/test_prohibited.jpg", "rb")
