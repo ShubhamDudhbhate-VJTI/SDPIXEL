@@ -108,7 +108,8 @@ def query_audits(
     status: Optional[str] = None,
     user_id: Optional[str] = None,
     request_id: Optional[str] = None,
-    limit: int = 50,
+    date_filter: Optional[str] = None,
+    limit: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     """
     Query audit records from Supabase.
@@ -117,6 +118,7 @@ def query_audits(
         status:     Filter by status ("success" or "failed").
         user_id:    Filter by user.
         request_id: Filter by specific request ID.
+        date_filter: Filter by exact date (YYYY-MM-DD).
         limit:      Max records to return.
 
     Returns:
@@ -125,7 +127,10 @@ def query_audits(
     base_url = _get_base_url()
     headers = _get_headers()
 
-    url = f"{base_url}/rest/v1/{TABLE_NAME}?order=created_at.desc&limit={limit}"
+    url = f"{base_url}/rest/v1/{TABLE_NAME}?order=created_at.desc"
+    
+    if limit is not None:
+        url += f"&limit={limit}"
 
     if status:
         url += f"&status=eq.{status}"
@@ -133,6 +138,8 @@ def query_audits(
         url += f"&user_id=eq.{user_id}"
     if request_id:
         url += f"&request_id=eq.{request_id}"
+    if date_filter:
+        url += f"&created_at=gte.{date_filter}T00:00:00Z&created_at=lte.{date_filter}T23:59:59Z"
 
     response = requests.get(url, headers=headers, timeout=15)
     response.raise_for_status()
