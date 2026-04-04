@@ -125,8 +125,8 @@ const ImageUploader = ({ onImagesSelect, selectedImages, onClearImage }) => {
         onDrop={handleDrop}
         className={`border border-dashed rounded-2xl p-10 sm:p-12 text-center transition-all cursor-pointer ${
           isDragOver 
-            ? 'border-blue-300 bg-blue-50/40' 
-            : 'border-slate-300/80 hover:border-blue-300 hover:bg-blue-50/20'
+            ? 'border-teal-400 bg-teal-50/50' 
+            : 'border-slate-300/80 hover:border-teal-300 hover:bg-teal-50/25'
         }`}
       >
         <input
@@ -138,8 +138,8 @@ const ImageUploader = ({ onImagesSelect, selectedImages, onClearImage }) => {
           id="image-upload"
         />
         <label htmlFor="image-upload" className="cursor-pointer">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600/10 border border-blue-200/50">
-            <Upload className="w-6 h-6 text-blue-700" />
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-teal-200/60 bg-teal-600/10">
+            <Upload className="w-6 h-6 text-teal-700" />
           </div>
           <p className="text-lg font-semibold text-slate-900 mb-2">
             Drop X-ray image here or click to browse

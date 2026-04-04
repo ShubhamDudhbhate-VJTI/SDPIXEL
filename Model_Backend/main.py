@@ -15,6 +15,7 @@ Endpoints:
 """
 
 from __future__ import annotations
+from utils.shap_explainer import YOLOShapExplainer
 
 import logging
 import mimetypes
@@ -23,12 +24,20 @@ import shutil
 import tempfile
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+# Load .env before anything else reads env vars
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed, rely on system env vars
+
 import cv2
 import numpy as np
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from PIL import Image
@@ -36,6 +45,9 @@ from PIL import Image
 # ── Internal utilities ──────────────────────────────────────────────────
 from utils.audit import AuditTrail
 from utils.detector import XRayDetector
+from utils.ipfs_client import upload_to_ipfs, fetch_from_ipfs
+from utils.supabase_client import store_audit_metadata, query_audits
+from utils.encryption import encrypt_data, decrypt_data
 from utils.gradcam import generate_gradcam, overlay_heatmap
 from utils.image_comparator import compare_scans
 from utils.risk_scorer import calculate_risk
@@ -185,6 +197,7 @@ async def analyze(
     file: UploadFile = File(...),
     reference: Optional[UploadFile] = File(None),
     manifest: Optional[UploadFile] = File(None),
+    background_tasks: BackgroundTasks = None,
 ):
     """
     Run the full analysis pipeline on an uploaded X-ray scan image.
@@ -409,8 +422,12 @@ async def analyze(
             outputs["manifestItems"] = manifest_items
 
         # ── Audit: finalize and save ────────────────────────────────
-        audit.finalize("success")
+        audit_json = audit.finalize("success")
         logger.info("✓ Audit saved: request_id=%s, steps=%d", audit.request_id, len(audit.steps))
+
+        # ── IPFS: upload audit JSON in background ─────────────────────
+        if background_tasks is not None:
+            background_tasks.add_task(_upload_audit_to_ipfs, audit_json, audit.request_id)
 
         return {
             "detections": detections,
@@ -427,6 +444,102 @@ async def analyze(
                     p.unlink()
                 except OSError:
                     pass
+
+
+def _upload_audit_to_ipfs(audit_json: dict, request_id: str) -> None:
+    """Background task: upload audit to IPFS, then store CID in Supabase."""
+    cid = None
+    try:
+        # Encrypt the audit dictionary before uploading it to public IPFS
+        encrypted_string = encrypt_data(audit_json)
+        
+        # Package it so it's still technically a valid JSON object structure for Pinata, 
+        # but the content is just an encrypted string.
+        secure_payload = {"encrypted_payload": encrypted_string}
+        
+        cid = upload_to_ipfs(secure_payload, name=request_id)
+        logger.info("✓ IPFS upload complete: request_id=%s, CID=%s", request_id, cid)
+    except Exception as exc:
+        logger.error("✗ IPFS upload failed for request_id=%s: %s", request_id, exc)
+        return
+
+    # Store CID + metadata in Supabase
+    try:
+        status = audit_json.get("final_status", "success")
+        step_names = [s.get("service", "") for s in audit_json.get("steps", [])]
+        description = f"Pipeline: {', '.join(step_names)}. Status: {status}"
+        store_audit_metadata(
+            cid=cid,
+            request_id=request_id,
+            status=status,
+            description=description,
+        )
+        logger.info("✓ Supabase metadata stored: request_id=%s", request_id)
+    except Exception as exc:
+        logger.error("✗ Supabase insert failed for request_id=%s: %s", request_id, exc)
+
+
+# ── Endpoint: Audits ───────────────────────────────────────────────────
+
+@app.get("/api/audit/logs")
+async def get_all_audits(limit: Optional[int] = Query(None, description="Max logs to return (leave blank for all)"), date_filter: Optional[str] = Query(None, description="Filter by date in DD-MM-YYYY format (e.g. 04-04-2026)")):
+    """Fetch a list of all audit metadata from Supabase, optionally filtered by date."""
+    try:
+        formatted_date = None
+        if date_filter:
+            # Convert DD-MM-YYYY to YYYY-MM-DD for database query
+            try:
+                date_obj = datetime.strptime(date_filter, "%d-%m-%Y")
+                formatted_date = date_obj.strftime("%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid date format. Please use DD-MM-YYYY (e.g. 04-04-2026)")
+
+        records = query_audits(limit=limit, date_filter=formatted_date)
+        return {"logs": records}
+    except Exception as exc:
+        logger.error("Failed to query audit logs: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch audit logs from database")
+
+
+@app.get("/api/audit/logs/{request_id}")
+async def get_audit_by_request_id(request_id: str):
+    """
+    Fetch the detailed audit log using the request_id.
+    Queries Supabase to find the CID, pulls the encrypted JSON from Pinata IPFS, and decrypts it.
+    """
+    try:
+        # 1. Look up the CID in Supabase using the request_id
+        db_records = query_audits(request_id=request_id)
+        if not db_records:
+            raise HTTPException(status_code=404, detail=f"No audit found for request_id: {request_id}")
+            
+        cid = db_records[0].get("cid")
+        if not cid:
+            raise ValueError("Database record missing CID")
+
+        # 2. Fetch encrypted blob from IPFS using the CID
+        secure_payload = fetch_from_ipfs(cid)
+        
+        # 3. Extract encrypted string (handle backwards compatibility)
+        encrypted_string = secure_payload.get("encrypted_payload")
+        
+        if not encrypted_string:
+            # If it doesn't have an encrypted payload, it might be an older 
+            # scan from before we enabled encryption. Return it as-is.
+            return {"audit": secure_payload}
+            
+        # 4. Decrypt back to readable JSON
+        decrypted_json = decrypt_data(encrypted_string)
+        
+        return {
+            "audit": decrypted_json,
+            "metadata": db_records[0] # include the db metadata (timestamp, etc.)
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to fetch or decrypt audit for request_id %s: %s", request_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to retrieve or decrypt the audit package")
 
 
 # ── Endpoint: POST /api/manifest/extract ───────────────────────────────
