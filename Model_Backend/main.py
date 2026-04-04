@@ -20,6 +20,7 @@ Endpoints:
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import mimetypes
 import os
@@ -37,6 +38,44 @@ try:
     load_dotenv()
 except ImportError:
     pass  # python-dotenv not installed, rely on system env vars
+
+# ── PyMuPDF — optional, for PDF→image rendering ────────────────────────
+try:
+    import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
+except ImportError:
+    fitz = None  # type: ignore[assignment]
+    PYMUPDF_AVAILABLE = False
+
+# ── httpx — optional, for external SHAP service ────────────────────────
+try:
+    import httpx
+    HTTPX_AVAILABLE = True
+except ImportError:
+    httpx = None  # type: ignore[assignment]
+    HTTPX_AVAILABLE = False
+
+# ── VLM invoice extractor — optional ───────────────────────────────────
+try:
+    from utils.vlm_extractor import extract_invoice_data
+    VLM_AVAILABLE = True
+except Exception as _vlm_import_err:
+    extract_invoice_data = None  # type: ignore[assignment]
+    VLM_AVAILABLE = False
+    logging.getLogger(__name__).warning(
+        "vlm_extractor unavailable: %s", _vlm_import_err
+    )
+
+# ── TextualRiskAnalyzer — optional ─────────────────────────────────────
+try:
+    from textual_risk_analyzer import TextualRiskAnalyzer
+    TEXTUAL_RISK_AVAILABLE = True
+except Exception as _tra_import_err:
+    TextualRiskAnalyzer = None  # type: ignore[assignment]
+    TEXTUAL_RISK_AVAILABLE = False
+    logging.getLogger(__name__).warning(
+        "TextualRiskAnalyzer unavailable: %s", _tra_import_err
+    )
 
 import cv2
 import numpy as np
@@ -81,6 +120,9 @@ except Exception as _shap_import_err:
 # ── Configuration ───────────────────────────────────────────────────────
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "model/best.pt")
+
+# External SHAP micro-service URL (set via env var; empty string = disabled)
+SHAP_SERVICE_URL = os.environ.get("SHAP_SERVICE_URL", "")
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "outputs")).resolve()
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -183,6 +225,27 @@ def _xyxy_to_xywh(bbox: list[float]) -> dict:
     }
 
 
+def _sanitize_labels(labels: list[str], max_words: int = 2) -> list[str]:
+    """Truncate labels to max_words to stay within OWL-ViT's 16-token limit."""
+    import re
+    sanitized = []
+    for label in labels:
+        # Remove special characters, keep only alphanumeric and spaces
+        clean = re.sub(r"[^a-zA-Z0-9\s]", "", label.strip())
+        # Take only first 3 words
+        short = " ".join(clean.split()[:max_words])
+        if short:
+            sanitized.append(short.lower())
+    # Deduplicate while preserving order
+    seen = set()
+    result = []
+    for s in sanitized:
+        if s not in seen:
+            seen.add(s)
+            result.append(s)
+    return result if result else ["cargo", "package", "item"]
+
+
 def _transform_detections(
     raw_detections: list[dict],
 ) -> list[dict]:
@@ -220,6 +283,63 @@ def _run_ssim_sync(tmp_ref_path: str, image: Image.Image):
     """
     ref_image = Image.open(tmp_ref_path).convert("RGB")
     return compare_scans(image, ref_image)
+
+
+def pdf_to_base64(pdf_bytes: bytes) -> Optional[str]:
+    """
+    Render page 0 of a PDF to a PNG image using PyMuPDF at 2× scale and
+    return the result as a base64-encoded string (no data-URI prefix).
+
+    Returns None when PyMuPDF is not installed or rendering fails.
+    """
+    if not PYMUPDF_AVAILABLE or fitz is None:
+        logger.warning("PyMuPDF not available — skipping PDF→image conversion")
+        return None
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        page = doc.load_page(0)
+        mat = fitz.Matrix(2.0, 2.0)  # 2× scale
+        pix = page.get_pixmap(matrix=mat)
+        png_bytes = pix.tobytes("png")
+        return base64.b64encode(png_bytes).decode("utf-8")
+    except Exception as exc:
+        logger.warning("pdf_to_base64 failed: %s", exc)
+        return None
+
+
+async def _call_shap_service(
+    image: "Image.Image",
+    timeout: float = 15.0,
+) -> Optional[dict]:
+    """
+    Call the external SHAP micro-service (ngrok endpoint) with the X-ray image.
+
+    Sends the image as a multipart/form-data upload and expects a JSON response
+    with keys: label, confidence, strength, reliability, coverage, verdict.
+
+    Returns None when:
+      - SHAP_SERVICE_URL is not configured
+      - httpx is not installed
+      - Network error or timeout occurs
+      - Service returns a non-2xx status
+    """
+    if not SHAP_SERVICE_URL or not HTTPX_AVAILABLE or httpx is None:
+        return None
+    try:
+        import io
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        buf.seek(0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                SHAP_SERVICE_URL,
+                files={"file": ("scan.png", buf, "image/png")},
+            )
+            response.raise_for_status()
+            return response.json()
+    except Exception as exc:
+        logger.warning("External SHAP service call failed: %s", exc)
+        return None
 
 
 def _extract_shap_intensity(
@@ -305,6 +425,8 @@ async def analyze(
 
         # Extract manifest items if a manifest PDF was included
         manifest_items: list[str] = []
+        vlm_result: Optional[dict] = None
+        vision_labels: list[str] = []
         if manifest is not None:
             tmp_manifest_path = _save_upload_to_temp(manifest, suffix=".pdf")
             t0 = time.time()
@@ -316,6 +438,56 @@ async def analyze(
                 output_data={"item_count": len(manifest_items), "items": manifest_items},
                 latency=time.time() - t0,
             )
+
+            # VLM invoice extraction: render PDF page 0 → base64 → Ollama VLM
+            if VLM_AVAILABLE and extract_invoice_data is not None:
+                try:
+                    pdf_bytes = tmp_manifest_path.read_bytes()
+                    b64 = await asyncio.to_thread(pdf_to_base64, pdf_bytes)
+                    if b64 is not None:
+                        t0 = time.time()
+                        raw_vlm = await asyncio.to_thread(extract_invoice_data, b64)
+                        if "_error" in raw_vlm:
+                            logger.warning(
+                                "VLM extraction returned error: %s", raw_vlm["_error"]
+                            )
+                            audit.log_step(
+                                service="vlm_extraction",
+                                status="failed",
+                                error=raw_vlm.get("_error", "unknown"),
+                            )
+                        else:
+                            vlm_result = raw_vlm
+                            # Use vision_label for OWL-ViT detection (more descriptive),
+                            # but map back to item_name for display on bounding boxes.
+                            vision_labels = [
+                                item["vision_label"]
+                                for item in vlm_result.get("extracted_items", [])
+                                if item.get("vision_label")
+                            ]
+                            audit.log_step(
+                                service="vlm_extraction",
+                                status="success",
+                                input_data={"filename": manifest.filename},
+                                output_data={
+                                    "item_count": len(vlm_result.get("extracted_items", [])),
+                                    "vision_label_count": len(vision_labels),
+                                },
+                                latency=time.time() - t0,
+                            )
+                    else:
+                        audit.log_step(
+                            service="vlm_extraction",
+                            status="skipped",
+                            output_data={"reason": "PyMuPDF unavailable"},
+                        )
+                except Exception as exc:
+                    logger.warning("VLM extraction step failed: %s", exc)
+                    audit.log_step(
+                        service="vlm_extraction",
+                        status="failed",
+                        error=str(exc),
+                    )
 
         # ── Stage 1: YOLO detection + SSIM comparison (parallel) ────
         #
@@ -460,32 +632,53 @@ async def analyze(
                     error=str(exc),
                 )
 
-        # ── Stage 3c: SHAP intensity score ───────────────────────────
+        # ── Stage 3c: SHAP — external service (primary) → local fallback ──
         #
-        # Runs in a thread to avoid blocking the event loop.
-        # Returns None when SHAP is unavailable or no detection is found.
+        # 1. Try the external SHAP micro-service (httpx, 15 s timeout).
+        #    Returns full SHAP dict {label, confidence, strength, reliability,
+        #    coverage, verdict} stored in outputs["shap"].
+        # 2. If the service is not configured or fails, fall back to the local
+        #    YOLOShapExplainer to obtain shap_intensity_score only.
         # visual_risk.py handles None gracefully (redistributes weight).
         shap_intensity_score: Optional[float] = None
+        shap_data: Optional[dict] = None
         try:
             t0 = time.time()
-            shap_intensity_score = await asyncio.to_thread(
-                _extract_shap_intensity, detector, image
-            )
-            if shap_intensity_score is not None:
+            shap_data = await _call_shap_service(image)
+            if shap_data is not None:
+                outputs["shap"] = shap_data
+                # Derive intensity score from coverage field (0–100 → 0–1)
+                coverage = shap_data.get("coverage", 0)
+                shap_intensity_score = min(float(coverage) / 100.0, 1.0)
                 outputs["shapIntensityScore"] = shap_intensity_score
                 audit.log_step(
                     service="shap_explainer",
                     status="success",
-                    input_data={"image_size": list(image.size)},
-                    output_data={"shap_intensity_score": shap_intensity_score},
+                    input_data={"source": "external_service"},
+                    output_data=shap_data,
                     latency=time.time() - t0,
                 )
             else:
-                audit.log_step(
-                    service="shap_explainer",
-                    status="skipped",
-                    output_data={"reason": "no detection or SHAP unavailable"},
+                # External service not configured or failed — try local SHAP
+                t0 = time.time()
+                shap_intensity_score = await asyncio.to_thread(
+                    _extract_shap_intensity, detector, image
                 )
+                if shap_intensity_score is not None:
+                    outputs["shapIntensityScore"] = shap_intensity_score
+                    audit.log_step(
+                        service="shap_explainer",
+                        status="success",
+                        input_data={"source": "local_fallback"},
+                        output_data={"shap_intensity_score": shap_intensity_score},
+                        latency=time.time() - t0,
+                    )
+                else:
+                    audit.log_step(
+                        service="shap_explainer",
+                        status="skipped",
+                        output_data={"reason": "no detection or SHAP unavailable"},
+                    )
         except Exception as exc:
             logger.warning("SHAP step failed: %s", exc)
             audit.log_step(
@@ -499,15 +692,41 @@ async def analyze(
         if inspector is not None:
             try:
                 t0 = time.time()
-                zs_labels = manifest_items if manifest_items else list(DEFAULT_SCAN_LABELS)
+                # Priority: vision_labels (VLM) > manifest_items (heuristic) > DEFAULT_SCAN_LABELS
+                raw_zs_labels = vision_labels if vision_labels else (manifest_items if manifest_items else list(DEFAULT_SCAN_LABELS))
+                zs_labels = _sanitize_labels(raw_zs_labels)
+
+                # Build mapping: sanitized vision_label → item_name for display
+                # so OWL-ViT detects with descriptive labels but boxes show short names.
+                label_display_map: dict[str, str] = {}
+                if vision_labels and vlm_result is not None:
+                    for item in vlm_result.get("extracted_items", []):
+                        vl = item.get("vision_label", "")
+                        iname = item.get("item_name", "")
+                        if vl and iname:
+                            sanitized = _sanitize_labels([vl])[0] if _sanitize_labels([vl]) else ""
+                            if sanitized:
+                                label_display_map[sanitized] = iname
+
                 inspection = await asyncio.to_thread(
                     inspector.inspect, str(tmp_path), zs_labels
                 )
+
+                # Remap detected labels to item_name for display
+                if label_display_map:
+                    for det_item in inspection.all_items:
+                        det_item.label = label_display_map.get(det_item.label, det_item.label)
+                    inspection.missing_manifest_items = [
+                        label_display_map.get(m, m) for m in inspection.missing_manifest_items
+                    ]
 
                 image_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
                 overlay = draw_inspection_overlay(image_bgr, inspection)
                 overlay_path = _unique_output_path("zero_shot")
                 cv2.imwrite(str(overlay_path), overlay)
+
+                # Display labels for the frontend (item_name when available)
+                display_labels = [label_display_map.get(l, l) for l in zs_labels] if label_display_map else zs_labels
 
                 outputs["zeroShot"] = {
                     "overlayImage": str(
@@ -523,7 +742,7 @@ async def analyze(
                     "timings": {
                         k: round(v, 3) for k, v in inspection.timings.items()
                     },
-                    "labelsUsed": zs_labels,
+                    "labelsUsed": display_labels,
                 }
 
                 # Keep legacy fields for backward compat
@@ -596,10 +815,38 @@ async def analyze(
         )
 
         # Stage 7–8: Data risk + final risk
-        # data_risk is None until llm_extractor.py is wired in (Step 5).
+        # Run TextualRiskAnalyzer when VLM extraction succeeded.
         # compute_final_risk() handles None gracefully: final_risk = visual_risk.
-        # TODO: replace None with compute_data_risk() output after Step 7.
         data_risk: Optional[float] = None
+        data_risk_breakdown: dict = {}
+        data_risk_context: Optional[dict] = None
+        if vlm_result is not None and TEXTUAL_RISK_AVAILABLE and TextualRiskAnalyzer is not None:
+            try:
+                t0 = time.time()
+                tra_result = await asyncio.to_thread(
+                    TextualRiskAnalyzer().analyze, vlm_result
+                )
+                tra_dict = tra_result.to_dict()
+                data_risk = tra_dict["Data_Risk"]
+                data_risk_breakdown = tra_dict.get("breakdown", {})
+                data_risk_context = tra_dict.get("context")
+                audit.log_step(
+                    service="data_risk_analysis",
+                    status="success",
+                    input_data={"vlm_item_count": len(vlm_result.get("extracted_items", []))},
+                    output_data={
+                        "data_risk": data_risk,
+                        "risk_level": tra_dict.get("risk_level"),
+                    },
+                    latency=time.time() - t0,
+                )
+            except Exception as exc:
+                logger.warning("TextualRiskAnalyzer failed: %s", exc)
+                audit.log_step(
+                    service="data_risk_analysis",
+                    status="failed",
+                    error=str(exc),
+                )
         final_risk, decision = compute_final_risk(data_risk, visual_risk)
 
         audit.log_step(
@@ -631,12 +878,17 @@ async def analyze(
                 "uncertain_ratio": round(uncertain_ratio, 4),
                 "ssim_risk": round(ssim_risk, 4),
                 "shap_intensity_score": shap_intensity_score,
-                # Populated once llm_extractor.py is wired in
-                "value_anomaly": None,
-                "hs_code_risk": None,
-                "country_risk": None,
+                "value_anomaly": data_risk_breakdown.get("value_anomaly"),
+                "hs_code_risk": data_risk_breakdown.get("hs_code_risk"),
+                "country_risk": data_risk_breakdown.get("country_risk"),
             },
         })
+
+        # Attach VLM and data risk context to outputs
+        if vlm_result is not None:
+            outputs["vlm_result"] = vlm_result
+        if data_risk_context is not None:
+            outputs["data_risk_context"] = data_risk_context
 
         # ── Audit: finalize and save ────────────────────────────────
         audit_json = audit.finalize("success")
@@ -820,9 +1072,15 @@ def _extract_items_from_pdf(pdf_path: Path) -> list[str]:
 @app.post("/api/manifest/extract")
 async def manifest_extract(file: UploadFile = File(...)):
     """
-    Parse a manifest PDF and return extracted cargo item names.
+    Parse a manifest PDF using VLM extraction (primary) with pdfplumber fallback.
 
-    Response: {"items": ["item1", "item2", ...]}
+    Pipeline:
+      1. PDF → JPEG image (PyMuPDF) → base64
+      2. base64 → VLM extraction (Ollama vision model)
+      3. VLM result → TextualRiskAnalyzer (13-stage risk engine)
+      4. Fallback: pdfplumber heuristic if VLM is unavailable
+
+    Response: {items, extraction_method, vlm_result?, risk_analysis?}
     """
     if file.content_type and file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="File must be a PDF")
@@ -830,8 +1088,60 @@ async def manifest_extract(file: UploadFile = File(...)):
     tmp_path: Optional[Path] = None
     try:
         tmp_path = _save_upload_to_temp(file, suffix=".pdf")
+        pdf_bytes = tmp_path.read_bytes()
+
+        # ── Primary: VLM extraction ────────────────────────────────────
+        if VLM_AVAILABLE and extract_invoice_data is not None and PYMUPDF_AVAILABLE:
+            try:
+                b64 = await asyncio.to_thread(pdf_to_base64, pdf_bytes)
+                if b64 is not None:
+                    vlm_result = await asyncio.to_thread(extract_invoice_data, b64)
+
+                    if "_error" not in vlm_result:
+                        # Extract item names from VLM structured output
+                        extracted_items = vlm_result.get("extracted_items", [])
+                        items = [
+                            item.get("item_name", "").strip()
+                            for item in extracted_items
+                            if item.get("item_name", "").strip()
+                        ]
+
+                        # Run TextualRiskAnalyzer
+                        risk_analysis = None
+                        if TEXTUAL_RISK_AVAILABLE and TextualRiskAnalyzer is not None:
+                            try:
+                                tra_result = await asyncio.to_thread(
+                                    TextualRiskAnalyzer().analyze, vlm_result
+                                )
+                                risk_analysis = tra_result.to_dict()
+                            except Exception as exc:
+                                logger.warning("TextualRiskAnalyzer failed in manifest extract: %s", exc)
+
+                        logger.info(
+                            "VLM manifest extraction: %d items, risk=%s",
+                            len(items),
+                            risk_analysis.get("risk_level") if risk_analysis else "N/A",
+                        )
+
+                        return {
+                            "items": items if items else _extract_items_from_pdf(tmp_path),
+                            "extraction_method": "vlm" if items else "pdfplumber",
+                            "vlm_result": vlm_result,
+                            "risk_analysis": risk_analysis,
+                        }
+                    else:
+                        logger.warning("VLM extraction returned error: %s", vlm_result.get("_error"))
+            except Exception as exc:
+                logger.warning("VLM manifest extraction failed, falling back to pdfplumber: %s", exc)
+
+        # ── Fallback: pdfplumber heuristic ─────────────────────────────
         items = _extract_items_from_pdf(tmp_path)
-        return {"items": items}
+        return {
+            "items": items,
+            "extraction_method": "pdfplumber",
+            "vlm_result": None,
+            "risk_analysis": None,
+        }
     finally:
         if tmp_path and tmp_path.exists():
             try:

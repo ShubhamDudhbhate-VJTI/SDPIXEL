@@ -13,6 +13,7 @@ import ScanHeatmapComparison from '../components/ScanHeatmapComparison';
 import DownloadReport from '../components/DownloadReport';
 import ResultsOutputs from '../components/ResultsOutputs';
 import ZeroShotOutput from '../components/ZeroShotOutput';
+import ShapAnalysis from '../components/ShapAnalysis';
 import { useDetections } from '../hooks/useDetections';
 import { generateTransactionId, saveTransaction } from '../utils/transactions';
 import heroImage from '../assets/hero.png';
@@ -26,6 +27,7 @@ function AnalyzePage() {
   const [manifestPdfFile, setManifestPdfFile] = useState(null);
   const [selectedDetectionId, setSelectedDetectionId] = useState(null);
   const [savedTxn, setSavedTxn] = useState(null);
+  const [vlmData, setVlmData] = useState(null);
 
   const { analyze, isLoading, detections, risk, outputs, error, clearResults } = useDetections();
 
@@ -154,6 +156,7 @@ function AnalyzePage() {
           manifestItems={manifestItems}
           onManifestItemsChange={setManifestItems}
           onManifestFileChange={setManifestPdfFile}
+          onVlmDataChange={setVlmData}
           referenceImages={referenceImages.map((r) => r.url)}
           onReferenceUpload={handleReferenceUpload}
           onRemoveReference={handleRemoveReference}
@@ -256,6 +259,10 @@ function AnalyzePage() {
                 imageUrl={primaryUploaded?.url ?? heroImage}
                 gradcamUrl={gradcamUrl}
               />
+
+              {outputs?.shap && (
+                <ShapAnalysis shap={outputs.shap} />
+              )}
 
               <ScanHeatmapComparison
                 referenceImageUrl={primaryReference}

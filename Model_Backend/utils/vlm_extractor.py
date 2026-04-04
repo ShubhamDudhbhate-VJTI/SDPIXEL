@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # Configuration defaults (can be overridden per-call)
 # ---------------------------------------------------------------------------
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
-DEFAULT_MODEL = "qwen3-vl:235b-cloud"
+DEFAULT_MODEL = "ministral-3:14b-cloud"
 DEFAULT_TIMEOUT = 300  # seconds
 
 # ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ def extract_invoice_data(
     Args:
         base64_image:  Base64-encoded JPEG/PNG string (no data-URI prefix).
         ollama_url:    Ollama API endpoint URL.
-        model:         Model name to use (e.g. 'qwen3-vl:235b-cloud').
+        model:         Model name to use (e.g. 'ministral-3:14b-cloud').
         timeout:       Request timeout in seconds.
         prompt:        Custom extraction prompt. Uses built-in prompt if None.
 

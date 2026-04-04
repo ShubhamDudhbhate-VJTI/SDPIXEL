@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
-import { FileText, Loader2, Upload, X } from 'lucide-react';
+import { FileText, Loader2, Upload, X, Sparkles, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { extractManifestFromPdf } from '../api/manifest';
 
 const Sidebar = ({
   manifestItems,
   onManifestItemsChange,
   onManifestFileChange,
+  onVlmDataChange,
   referenceImages,
   onReferenceUpload,
   onRemoveReference,
@@ -13,6 +14,9 @@ const Sidebar = ({
   const [manifestPdf, setManifestPdf] = useState(null);
   const [pdfStatus, setPdfStatus] = useState({ state: 'idle', message: '' });
   const [extractedItems, setExtractedItems] = useState([]);
+  const [extractionMethod, setExtractionMethod] = useState(null);
+  const [vlmResult, setVlmResult] = useState(null);
+  const [riskAnalysis, setRiskAnalysis] = useState(null);
 
   const extractedCount = extractedItems.length;
 
@@ -29,21 +33,37 @@ const Sidebar = ({
     }
 
     setManifestPdf(file);
-    setPdfStatus({ state: 'loading', message: 'Extracting items from PDF…' });
+    setPdfStatus({ state: 'loading', message: 'Extracting items via AI — this may take a minute…' });
 
     try {
-      const { items } = await extractManifestFromPdf(file);
-      setExtractedItems(items);
-      onManifestItemsChange(items);
+      const result = await extractManifestFromPdf(file);
+      setExtractedItems(result.items);
+      setExtractionMethod(result.extractionMethod);
+      setVlmResult(result.vlmResult);
+      setRiskAnalysis(result.riskAnalysis);
+      onManifestItemsChange(result.items);
       onManifestFileChange(file);
+      if (onVlmDataChange) {
+        onVlmDataChange({
+          vlmResult: result.vlmResult,
+          riskAnalysis: result.riskAnalysis,
+          extractionMethod: result.extractionMethod,
+        });
+      }
       setPdfStatus({
         state: 'ready',
-        message: items.length ? `Extracted ${items.length} item(s).` : 'No items found in PDF.',
+        message: result.items.length
+          ? `Extracted ${result.items.length} item(s) via ${result.extractionMethod === 'vlm' ? 'AI Vision Model' : 'text parser'}.`
+          : 'No items found in PDF.',
       });
     } catch (err) {
       setExtractedItems([]);
+      setExtractionMethod(null);
+      setVlmResult(null);
+      setRiskAnalysis(null);
       onManifestItemsChange([]);
       onManifestFileChange(null);
+      if (onVlmDataChange) onVlmDataChange(null);
       setPdfStatus({
         state: 'error',
         message: err?.message ? String(err.message) : 'Manifest extract failed.',
@@ -54,12 +74,40 @@ const Sidebar = ({
   const clearPdf = () => {
     setManifestPdf(null);
     setExtractedItems([]);
+    setExtractionMethod(null);
+    setVlmResult(null);
+    setRiskAnalysis(null);
     setPdfStatus({ state: 'idle', message: '' });
     onManifestItemsChange([]);
     onManifestFileChange(null);
+    if (onVlmDataChange) onVlmDataChange(null);
   };
 
   const extractedPreview = useMemo(() => extractedItems.slice(0, 12), [extractedItems]);
+
+  // Build rich item details from VLM output when available
+  const vlmItems = useMemo(() => {
+    if (!vlmResult?.extracted_items) return null;
+    return vlmResult.extracted_items.slice(0, 12).map((item, idx) => ({
+      key: idx,
+      name: item.item_name || `Item ${idx + 1}`,
+      quantity: item.units ?? item.packages ?? null,
+      hsCode: item.hs_code || null,
+      value: item.total_value ?? null,
+    }));
+  }, [vlmResult]);
+
+  // Risk level styling
+  const riskLevel = riskAnalysis?.risk_level;
+  const riskScore = riskAnalysis?.Data_Risk;
+  const riskColor = riskLevel === 'HIGH'
+    ? 'border-red-200 bg-red-50 text-red-800'
+    : riskLevel === 'MEDIUM'
+      ? 'border-amber-200 bg-amber-50 text-amber-800'
+      : riskLevel === 'LOW'
+        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+        : 'border-slate-200 bg-slate-50 text-slate-700';
+  const RiskIcon = riskLevel === 'HIGH' ? AlertTriangle : ShieldCheck;
 
   return (
     <aside className="w-full lg:w-[340px] shrink-0">
@@ -71,7 +119,7 @@ const Sidebar = ({
           </div>
 
           <p className="text-xs text-slate-500 mb-4">
-            Upload a manifest PDF. Items are extracted from this PDF and used for comparison.
+            Upload a manifest PDF. Items are extracted via AI vision model and used for inspection.
           </p>
 
           {manifestItems.length > 0 && (
@@ -90,7 +138,7 @@ const Sidebar = ({
           <div className="flex items-center justify-between gap-3 mb-2">
             <div>
               <div className="text-sm font-semibold text-slate-900">Upload manifest PDF</div>
-              <div className="text-xs text-slate-500">POST /api/manifest/extract</div>
+              <div className="text-xs text-slate-500">VLM extraction + risk analysis</div>
             </div>
             {(manifestPdf || extractedItems.length > 0) && (
               <button type="button" className="btn-secondary px-3 py-2" onClick={clearPdf}>
@@ -113,7 +161,7 @@ const Sidebar = ({
                   <FileText className="w-5 h-5 text-teal-700" />
                 </div>
                 <div className="text-sm font-semibold text-slate-900">Click to upload PDF</div>
-                <div className="text-xs text-slate-500 mt-1">Max 15MB</div>
+                <div className="text-xs text-slate-500 mt-1">Max 15MB · AI extracts items automatically</div>
               </label>
             </div>
           ) : (
@@ -126,9 +174,9 @@ const Sidebar = ({
                   </div>
                 </div>
                 {pdfStatus.state === 'loading' && (
-                  <span className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600">
+                  <span className="inline-flex items-center gap-2 text-xs font-semibold text-teal-700">
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Working…
+                    AI analyzing…
                   </span>
                 )}
               </div>
@@ -147,13 +195,74 @@ const Sidebar = ({
                 </div>
               )}
 
+              {/* Extraction method badge */}
+              {extractionMethod && pdfStatus.state === 'ready' && (
+                <div className="mt-3 flex items-center gap-2">
+                  <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
+                    extractionMethod === 'vlm'
+                      ? 'border border-violet-200 bg-violet-50 text-violet-700'
+                      : 'border border-slate-200 bg-slate-50 text-slate-600'
+                  }`}>
+                    {extractionMethod === 'vlm' && <Sparkles className="w-3 h-3" />}
+                    {extractionMethod === 'vlm' ? 'AI Vision Model' : 'Text Parser'}
+                  </span>
+                </div>
+              )}
+
+              {/* Risk analysis summary */}
+              {riskAnalysis && pdfStatus.state === 'ready' && (
+                <div className={`mt-3 flex items-center gap-2 rounded-lg border px-3 py-2 ${riskColor}`}>
+                  <RiskIcon className="w-4 h-4 shrink-0" />
+                  <div className="min-w-0">
+                    <span className="text-xs font-bold">{riskLevel} RISK</span>
+                    {riskScore != null && (
+                      <span className="ml-2 text-xs font-medium opacity-80">
+                        Score: {riskScore.toFixed(4)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="mt-4">
                 <div className="text-xs font-semibold text-slate-700 mb-2">
                   Extracted items ({extractedCount})
                 </div>
 
                 <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-                  {extractedCount ? (
+                  {vlmItems && vlmItems.length > 0 ? (
+                    /* Rich VLM items with details */
+                    <div className="space-y-2">
+                      {vlmItems.map((item) => (
+                        <div
+                          key={item.key}
+                          className="flex items-center justify-between gap-2 rounded-lg border border-slate-100 bg-white/80 px-2.5 py-1.5"
+                        >
+                          <span className="text-xs font-medium text-slate-900 truncate min-w-0">
+                            {item.name}
+                          </span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {item.quantity != null && (
+                              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
+                                ×{item.quantity}
+                              </span>
+                            )}
+                            {item.hsCode && (
+                              <span className="rounded bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-700">
+                                HS:{item.hsCode}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                      {vlmResult?.extracted_items?.length > 12 && (
+                        <div className="text-[10px] text-slate-500 text-center pt-1">
+                          +{vlmResult.extracted_items.length - 12} more items
+                        </div>
+                      )}
+                    </div>
+                  ) : extractedCount ? (
+                    /* Simple item badges (pdfplumber fallback) */
                     <div className="flex flex-wrap gap-2">
                       {extractedPreview.map((item, idx) => (
                         <span key={`${item}-${idx}`} className="badge badge-slate">

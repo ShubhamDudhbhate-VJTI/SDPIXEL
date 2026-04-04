@@ -2,7 +2,10 @@ import { getApiBaseUrl } from './analyze';
 
 /**
  * POST /api/manifest/extract — multipart field `file` (PDF).
- * Response: { items: string[] }
+ *
+ * Response (enriched):
+ *   { items: string[], extraction_method: "vlm"|"pdfplumber",
+ *     vlm_result: object|null, risk_analysis: object|null }
  */
 export async function extractManifestFromPdf(file) {
   const base = getApiBaseUrl();
@@ -22,10 +25,17 @@ export async function extractManifestFromPdf(file) {
   }
 
   const data = await res.json();
+
+  // Extract items — handle both old ({items}) and new enriched responses
   const raw = data?.items ?? data?.manifest_items ?? [];
   const items = Array.isArray(raw)
     ? raw.map((x) => String(x).trim()).filter(Boolean)
     : [];
 
-  return { items };
+  return {
+    items,
+    extractionMethod: data?.extraction_method ?? 'pdfplumber',
+    vlmResult: data?.vlm_result ?? null,
+    riskAnalysis: data?.risk_analysis ?? null,
+  };
 }
