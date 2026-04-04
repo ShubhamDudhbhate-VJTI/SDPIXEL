@@ -34,6 +34,7 @@ from fastapi.responses import FileResponse
 from PIL import Image
 
 # ── Internal utilities ──────────────────────────────────────────────────
+from utils.audit import AuditTrail
 from utils.detector import XRayDetector
 from utils.gradcam import generate_gradcam, overlay_heatmap
 from utils.image_comparator import compare_scans
@@ -199,6 +200,9 @@ async def analyze(
     tmp_manifest_path: Optional[Path] = None
 
     try:
+        # ── Audit: create a fresh trail for this request ────────────
+        audit = AuditTrail()
+
         # --- Save uploads ---
         suffix = Path(file.filename or "scan.png").suffix or ".png"
         tmp_path = _save_upload_to_temp(file, suffix=suffix)
@@ -212,32 +216,75 @@ async def analyze(
         manifest_items: list[str] = []
         if manifest is not None:
             tmp_manifest_path = _save_upload_to_temp(manifest, suffix=".pdf")
+            t0 = time.time()
             manifest_items = _extract_items_from_pdf(tmp_manifest_path)
+            audit.log_step(
+                service="manifest_extraction",
+                status="success",
+                input_data={"filename": manifest.filename},
+                output_data={"item_count": len(manifest_items), "items": manifest_items},
+                latency=time.time() - t0,
+            )
 
         # --- 1. YOLOv8 detection ---
         detector = get_detector()
+        t0 = time.time()
         raw_detections = detector.detect(image)
+        detection_latency = time.time() - t0
         detections = _transform_detections(raw_detections)
 
+        audit.log_step(
+            service="yolov8_detection",
+            status="success",
+            input_data={"filename": file.filename, "image_size": list(image.size)},
+            output_data={
+                "detection_count": len(detections),
+                "labels": [d["label"] for d in detections],
+            },
+            latency=detection_latency,
+            model_version=MODEL_PATH,
+        )
+
         # --- 2. Risk scoring ---
+        t0 = time.time()
         risk = calculate_risk(raw_detections)
-        # Risk scorer returns `flags` which frontend doesn't use but is fine to include
+        audit.log_step(
+            service="risk_scoring",
+            status="success",
+            input_data={"detection_count": len(raw_detections)},
+            output_data={"level": risk.get("level"), "score": risk.get("score")},
+            latency=time.time() - t0,
+        )
 
         # --- 3. Grad-CAM heatmap + highlight/output heatmaps ---
         outputs: dict = {}
         try:
+            t0 = time.time()
             # Generate the blended overlay (60% original + 40% heatmap)
             gradcam_image = generate_gradcam(MODEL_PATH, image)
             gradcam_path = _unique_output_path("gradcam")
             gradcam_image.save(str(gradcam_path))
             outputs["gradcam"] = str(gradcam_path.relative_to(OUTPUT_DIR.parent))
 
+            audit.log_step(
+                service="gradcam_generation",
+                status="success",
+                input_data={"image_size": list(image.size)},
+                output_data={"output_path": outputs["gradcam"]},
+                latency=time.time() - t0,
+            )
         except Exception as exc:
             logger.warning("Grad-CAM generation failed: %s", exc)
+            audit.log_step(
+                service="gradcam_generation",
+                status="failed",
+                error=str(exc),
+            )
 
         # --- 3b. SSIM image comparison (when reference scan is provided) ---
         if tmp_ref_path is not None:
             try:
+                t0 = time.time()
                 ref_image = Image.open(str(tmp_ref_path)).convert("RGB")
                 comparison = compare_scans(image, ref_image)
 
@@ -272,13 +319,31 @@ async def analyze(
                     len(comparison.changed_regions),
                     comparison.interpretation,
                 )
+
+                audit.log_step(
+                    service="ssim_comparison",
+                    status="success",
+                    input_data={"has_reference": True},
+                    output_data={
+                        "ssim_score": comparison.ssim_score,
+                        "interpretation": comparison.interpretation,
+                        "changed_regions": len(comparison.changed_regions),
+                    },
+                    latency=time.time() - t0,
+                )
             except Exception as exc:
                 logger.warning("SSIM comparison failed: %s", exc)
+                audit.log_step(
+                    service="ssim_comparison",
+                    status="failed",
+                    error=str(exc),
+                )
 
         # --- 4. Zero-shot inspection (always runs if enabled) ---
         inspector = get_zero_shot()
         if inspector is not None:
             try:
+                t0 = time.time()
                 # Use manifest items if available, otherwise default scan labels
                 zs_labels = manifest_items if manifest_items else list(DEFAULT_SCAN_LABELS)
                 inspection = inspector.inspect(str(tmp_path), zs_labels)
@@ -317,17 +382,41 @@ async def analyze(
                 lines.append(f"Declared: {len(inspection.declared_items_found)}")
                 lines.append(f"Undeclared: {len(inspection.undeclared_items)}")
                 outputs["zeroShotOutputText"] = "\n".join(lines)
+
+                audit.log_step(
+                    service="zero_shot_inspection",
+                    status="success",
+                    input_data={"label_count": len(zs_labels), "labels": zs_labels},
+                    output_data={
+                        "verdict": inspection.verdict.value,
+                        "total_objects": len(inspection.all_items),
+                        "declared_count": len(inspection.declared_items_found),
+                        "undeclared_count": len(inspection.undeclared_items),
+                        "missing_count": len(inspection.missing_manifest_items),
+                    },
+                    latency=time.time() - t0,
+                )
             except Exception as exc:
                 logger.warning("Zero-shot inspection failed: %s", exc)
+                audit.log_step(
+                    service="zero_shot_inspection",
+                    status="failed",
+                    error=str(exc),
+                )
 
         # --- 5. Include manifest items in outputs if available ---
         if manifest_items:
             outputs["manifestItems"] = manifest_items
 
+        # ── Audit: finalize and save ────────────────────────────────
+        audit.finalize("success")
+        logger.info("✓ Audit saved: request_id=%s, steps=%d", audit.request_id, len(audit.steps))
+
         return {
             "detections": detections,
             "risk": risk,
             "outputs": outputs if outputs else None,
+            "request_id": audit.request_id,
         }
 
     finally:
