@@ -75,8 +75,8 @@ function AnalyzePage() {
       if (result?.ok && result.detections != null) {
         const labels = Array.isArray(result.detections)
           ? result.detections
-              .slice(0, 12)
-              .map((d) => d.label ?? d.class_name ?? d.name ?? 'object')
+            .slice(0, 12)
+            .map((d) => d.label ?? d.class_name ?? d.name ?? 'object')
           : [];
         const id = generateTransactionId();
         saveTransaction({
@@ -206,7 +206,7 @@ function AnalyzePage() {
               animate={{ opacity: 1 }}
               className="text-center py-12"
             >
-                <Loader2 className="w-12 h-12 animate-spin mx-auto mb-4 text-teal-600" />
+              <Loader2 className="w-12 h-12 animate-spin mx-auto mb-4 text-teal-600" />
               <p className="text-lg font-medium text-gray-700">Analyzing X-ray scan with AI...</p>
               <p className="text-sm text-gray-500 mt-2">This may take a few seconds</p>
             </MotionDiv>

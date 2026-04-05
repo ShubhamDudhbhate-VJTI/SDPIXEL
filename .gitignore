@@ -38,3 +38,20 @@ Thumbs.db
 
 Model_Backend/audit_logs/
 Model_Backend/outputs/
+
+# Sensitive credentials & secrets
+JWT_PINNATA.txt
+*.key
+*.pem
+*.crt
+
+# Test data & binaries
+*.pdf
+Model_Backend/test_images/
+PIDray-main/tests/test_data/
+
+# Temporary/backup files
+*.tmp
+*.bak
+*.orig
+~*

@@ -32,6 +32,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+from pydantic import BaseModel
+
 # Load .env before anything else reads env vars
 try:
     from dotenv import load_dotenv
@@ -88,7 +90,7 @@ from PIL import Image
 from utils.audit import AuditTrail
 from utils.detector import XRayDetector
 from utils.ipfs_client import upload_to_ipfs, fetch_from_ipfs
-from utils.supabase_client import store_audit_metadata, query_audits
+from utils.supabase_client import store_audit_metadata, query_audits, store_transaction, get_transaction, query_transactions
 from utils.encryption import encrypt_data, decrypt_data
 from utils.gradcam import generate_gradcam, overlay_heatmap
 from utils.image_comparator import compare_scans
@@ -926,15 +928,35 @@ def _upload_audit_to_ipfs(audit_json: dict, request_id: str) -> None:
     """Background task: upload audit to IPFS, then store CID in Supabase."""
     cid = None
     try:
+        # Log start of upload
+        logger.info(f"Starting IPFS upload for request_id={request_id}")
+        
+        # Check if PINATA_JWT is configured (at runtime)
+        jwt_token = os.environ.get("PINATA_JWT", "")
+        if not jwt_token or jwt_token == "your_pinata_jwt_token_here":
+            logger.error(f"PINATA_JWT not configured! Cannot upload to IPFS. request_id={request_id}")
+            return
+            
         encrypted_string = encrypt_data(audit_json)
         secure_payload = {"encrypted_payload": encrypted_string}
         cid = upload_to_ipfs(secure_payload, name=request_id)
         logger.info("✓ IPFS upload complete: request_id=%s, CID=%s", request_id, cid)
     except Exception as exc:
         logger.error("✗ IPFS upload failed for request_id=%s: %s", request_id, exc)
+        logger.error("Exception details: %s", str(exc.__class__.__name__))
         return
 
     try:
+        # Check Supabase credentials at runtime
+        supabase_url = os.environ.get("SUPABASE_URL", "")
+        supabase_key = os.environ.get("SUPABASE_KEY", "")
+        if not supabase_url or supabase_url.startswith("paste_"):
+            logger.error(f"SUPABASE_URL not configured! Cannot store metadata. request_id={request_id}")
+            return
+        if not supabase_key or supabase_key.startswith("paste_"):
+            logger.error(f"SUPABASE_KEY not configured! Cannot store metadata. request_id={request_id}")
+            return
+            
         status = audit_json.get("final_status", "success")
         step_names = [s.get("service", "") for s in audit_json.get("steps", [])]
         description = f"Pipeline: {', '.join(step_names)}. Status: {status}"
@@ -953,11 +975,13 @@ def _upload_audit_to_ipfs(audit_json: dict, request_id: str) -> None:
 
 # ── Endpoint: Audits ───────────────────────────────────────────────────
 
+
 @app.get("/api/audit/detail/{request_id}")
 async def get_audit_detail_from_disk(request_id: str):
     """
-    Read a full audit trail JSON from disk (audit_logs/{request_id}.json).
-    This is the primary endpoint for the frontend HistoryPage.
+    Read a full audit trail JSON from local disk (audit_logs/{request_id}.json).
+    This is the PRIMARY endpoint for viewing full audit details.
+    Falls back to IPFS if local file is missing but Supabase has the CID.
     """
     import json as _json
     from utils.audit import AUDIT_LOG_DIR
@@ -966,31 +990,72 @@ async def get_audit_detail_from_disk(request_id: str):
     safe_id = request_id.replace("..", "").replace("/", "").replace("\\", "")
     audit_file = AUDIT_LOG_DIR / f"{safe_id}.json"
 
-    if not audit_file.exists() or not audit_file.is_file():
-        raise HTTPException(status_code=404, detail=f"No audit log found for request_id: {request_id}")
+    # 1. Try local disk first (fastest)
+    if audit_file.exists() and audit_file.is_file():
+        try:
+            audit_data = _json.loads(audit_file.read_text(encoding="utf-8"))
+            return {"audit": audit_data, "source": "disk"}
+        except Exception as exc:
+            logger.error("Failed to read audit file %s: %s", audit_file, exc)
 
+    # 2. Fallback: try fetching from IPFS via Supabase CID lookup
     try:
-        audit_data = _json.loads(audit_file.read_text(encoding="utf-8"))
-        return {"audit": audit_data}
+        db_records = query_audits(request_id=request_id)
+        if db_records:
+            cid = db_records[0].get("cid")
+            if cid:
+                secure_payload = fetch_from_ipfs(cid)
+                encrypted_string = secure_payload.get("encrypted_payload")
+                if encrypted_string:
+                    decrypted_json = decrypt_data(encrypted_string)
+                    return {
+                        "audit": decrypted_json,
+                        "metadata": db_records[0],
+                        "source": "ipfs",
+                    }
+                else:
+                    return {"audit": secure_payload, "source": "ipfs"}
     except Exception as exc:
-        logger.error("Failed to read audit file %s: %s", audit_file, exc)
-        raise HTTPException(status_code=500, detail="Failed to read audit log file")
+        logger.warning("IPFS fallback failed for %s: %s", request_id, exc)
+
+    raise HTTPException(status_code=404, detail=f"No audit log found for request_id: {request_id}")
+
 
 @app.get("/api/audit/logs")
-async def get_all_audits(limit: Optional[int] = Query(None, description="Max logs to return (leave blank for all)"), date_filter: Optional[str] = Query(None, description="Filter by date in DD-MM-YYYY format (e.g. 04-04-2026)")):
-    """Fetch a list of all audit metadata from Supabase, optionally filtered by date."""
+async def get_all_audits(
+    limit: Optional[int] = Query(5, description="Max logs to return"),
+    date_filter: Optional[str] = Query(None, description="Filter by date (DD-MM-YYYY)"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+):
+    """
+    Fetch list of audit records from Supabase audit_logs table.
+    Returns metadata only (request_id, status, date) — not the full audit JSON.
+    Use /api/audit/detail/{request_id} to get the full trail.
+    """
     try:
         formatted_date = None
         if date_filter:
-            # Convert DD-MM-YYYY to YYYY-MM-DD for database query
             try:
                 date_obj = datetime.strptime(date_filter, "%d-%m-%Y")
                 formatted_date = date_obj.strftime("%Y-%m-%d")
             except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid date format. Please use DD-MM-YYYY (e.g. 04-04-2026)")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid date format. Use DD-MM-YYYY (e.g. 04-04-2026)"
+                )
 
-        records = query_audits(limit=limit, date_filter=formatted_date)
-        return {"logs": records}
+        records = query_audits(limit=limit, date_filter=formatted_date, status=status)
+        return {
+            "logs": records,
+            "count": len(records),
+            "filters": {
+                "limit": limit,
+                "date_filter": date_filter,
+                "status": status,
+            },
+        }
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("Failed to query audit logs: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to fetch audit logs from database")
@@ -999,42 +1064,58 @@ async def get_all_audits(limit: Optional[int] = Query(None, description="Max log
 @app.get("/api/audit/logs/{request_id}")
 async def get_audit_by_request_id(request_id: str):
     """
-    Fetch the detailed audit log using the request_id.
-    Queries Supabase to find the CID, pulls the encrypted JSON from Pinata IPFS, and decrypts it.
+    Fetch audit metadata from Supabase by request_id.
+    If you need the full audit trail, use /api/audit/detail/{request_id} instead.
     """
     try:
-        # 1. Look up the CID in Supabase using the request_id
         db_records = query_audits(request_id=request_id)
         if not db_records:
             raise HTTPException(status_code=404, detail=f"No audit found for request_id: {request_id}")
-            
-        cid = db_records[0].get("cid")
-        if not cid:
-            raise ValueError("Database record missing CID")
 
-        # 2. Fetch encrypted blob from IPFS using the CID
-        secure_payload = fetch_from_ipfs(cid)
-        
-        # 3. Extract encrypted string (handle backwards compatibility)
-        encrypted_string = secure_payload.get("encrypted_payload")
-        
-        if not encrypted_string:
-            # If it doesn't have an encrypted payload, it might be an older 
-            # scan from before we enabled encryption. Return it as-is.
-            return {"audit": secure_payload}
-            
-        # 4. Decrypt back to readable JSON
-        decrypted_json = decrypt_data(encrypted_string)
-        
         return {
-            "audit": decrypted_json,
-            "metadata": db_records[0] # include the db metadata (timestamp, etc.)
+            "audit_meta": db_records[0],
+            "request_id": request_id,
         }
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("Failed to fetch or decrypt audit for request_id %s: %s", request_id, exc)
-        raise HTTPException(status_code=500, detail="Failed to retrieve or decrypt the audit package")
+        logger.error("Failed to fetch audit for request_id %s: %s", request_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to retrieve audit metadata")
+
+
+@app.get("/api/audit/local")
+async def list_local_audits(
+    limit: int = Query(10, description="Max logs to return"),
+):
+    """
+    List audit logs from local disk (audit_logs/ directory).
+    Useful when Supabase/IPFS is not configured — always works.
+    Returns a summary (request_id, timestamp, status, step_count) for each.
+    """
+    import json as _json
+    from utils.audit import AUDIT_LOG_DIR
+
+    if not AUDIT_LOG_DIR.exists():
+        return {"logs": [], "count": 0}
+
+    entries = []
+    for f in sorted(AUDIT_LOG_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            data = _json.loads(f.read_text(encoding="utf-8"))
+            entries.append({
+                "request_id": data.get("request_id", f.stem),
+                "timestamp": data.get("timestamp"),
+                "final_status": data.get("final_status", "unknown"),
+                "step_count": len(data.get("steps", [])),
+                "services": [s.get("service", "") for s in data.get("steps", [])],
+            })
+        except Exception:
+            continue
+        if len(entries) >= limit:
+            break
+
+    return {"logs": entries, "count": len(entries)}
+
 
 
 # ── Endpoint: POST /api/manifest/extract ───────────────────────────────
@@ -1199,6 +1280,76 @@ def serve_file(path: str = Query(..., description="Relative path to the file")):
 
     mime, _ = mimetypes.guess_type(str(full_path))
     return FileResponse(str(full_path), media_type=mime or "application/octet-stream")
+
+
+# ── Transaction Endpoints ──────────────────────────────────────────────
+
+
+# ── Pydantic Models for Transactions ────────────────────────────────────
+
+class TransactionCreate(BaseModel):
+    transaction_id: str
+    request_id: Optional[str] = None
+    container_id: Optional[str] = None
+    risk_score: Optional[int] = None
+    risk_level: Optional[str] = None
+    status: str = "completed"
+    metadata: Optional[dict] = None
+
+
+@app.post("/api/transactions")
+async def create_transaction(data: TransactionCreate):
+    """Store a transaction in Supabase."""
+    try:
+        logger.info(f"Received transaction: {data.transaction_id}")
+        
+        result = store_transaction(
+            transaction_id=data.transaction_id,
+            request_id=data.request_id,
+            container_id=data.container_id,
+            risk_score=data.risk_score,
+            risk_level=data.risk_level,
+            status=data.status,
+            metadata=data.metadata
+        )
+        return {"success": True, "data": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to store transaction: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/transactions/{transaction_id}")
+def get_transaction_by_id(transaction_id: str):
+    """Get a transaction by ID from Supabase."""
+    try:
+        result = get_transaction(transaction_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        return {"success": True, "data": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/transactions")
+def list_transactions(
+    request_id: str = Query(None, description="Filter by request ID"),
+    risk_level: str = Query(None, description="Filter by risk level"),
+    limit: int = Query(50, description="Max records to return"),
+):
+    """Query transactions from Supabase."""
+    try:
+        result = query_transactions(
+            request_id=request_id,
+            risk_level=risk_level,
+            limit=limit,
+        )
+        return {"success": True, "data": result, "count": len(result)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Health check ───────────────────────────────────────────────────────
