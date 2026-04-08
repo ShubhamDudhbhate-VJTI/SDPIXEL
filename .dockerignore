@@ -1,0 +1,45 @@
+# Frontend (not needed for backend container)
+Frontend/
+
+# Research folders
+PIDray-main/
+cargoxray-master/
+xray_v14/
+testing/
+
+# Git & IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Runtime artifacts
+Model_Backend/outputs/
+Model_Backend/audit_logs/
+Model_Backend/test_images/
+Model_Backend/tests/
+
+# Docs
+*.md
+docs/
+db_schema/
+
+# Secrets
+.env
+*.env
+
+# Large model files (use volumes or download at runtime)
+*.pt
+*.pth
+*.onnx
+*.safetensors
+
+# Misc
+*.log
+*.tmp
