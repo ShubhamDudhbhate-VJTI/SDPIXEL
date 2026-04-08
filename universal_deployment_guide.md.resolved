@@ -1,0 +1,1544 @@
+# 🌐 The Complete Deployment Guide — From Zero to Production
+## For Full-Stack ML Applications (Frontend + FastAPI + ML Models + Database + External Services)
+
+> **Purpose:** A universal, reusable, extremely detailed guide for deploying any project that has a **React/Vite frontend**, a **Python/FastAPI backend with ML models**, a **managed database**, and **external services** (IPFS, cloud storage, APIs, etc.)
+>
+> **Use this for ANY project** — not tied to a specific codebase.
+
+---
+
+## Table of Contents
+
+1. [Understanding the Deployment Landscape](#1-understanding-the-deployment-landscape)
+2. [Phase 0: Prerequisites & Accounts](#2-phase-0-prerequisites--accounts)
+3. [Phase 1: Audit Your Project](#3-phase-1-audit-your-project)
+4. [Phase 2: Environment Variables & Secrets Management](#4-phase-2-environment-variables--secrets-management)
+5. [Phase 3: Dependency Management](#5-phase-3-dependency-management)
+6. [Phase 4: Dockerizing the Backend](#6-phase-4-dockerizing-the-backend)
+7. [Phase 5: Handling Large ML Model Files](#7-phase-5-handling-large-ml-model-files)
+8. [Phase 6: Database Setup for Production](#8-phase-6-database-setup-for-production)
+9. [Phase 7: Backend Deployment (Railway)](#9-phase-7-backend-deployment-railway)
+10. [Phase 8: Frontend Deployment (Vercel)](#10-phase-8-frontend-deployment-vercel)
+11. [Phase 9: Connecting Frontend ↔ Backend](#11-phase-9-connecting-frontend--backend)
+12. [Phase 10: External Services Integration](#12-phase-10-external-services-integration)
+13. [Phase 11: Security Hardening](#13-phase-11-security-hardening)
+14. [Phase 12: Monitoring, Logging & Debugging](#14-phase-12-monitoring-logging--debugging)
+15. [Phase 13: CI/CD Automation](#15-phase-13-cicd-automation)
+16. [Phase 14: Scaling & Performance](#16-phase-14-scaling--performance)
+17. [Phase 15: Cost Management](#17-phase-15-cost-management)
+18. [Common Errors & Troubleshooting](#18-common-errors--troubleshooting)
+19. [Universal Pre-Deployment Checklist](#19-universal-pre-deployment-checklist)
+20. [Platform Comparison Cheat Sheet](#20-platform-comparison-cheat-sheet)
+
+---
+
+## 1. Understanding the Deployment Landscape
+
+### 1.1 What Does "Deployment" Actually Mean?
+
+When you develop locally, everything runs on your machine:
+- Frontend dev server → `localhost:5173`
+- Backend server → `localhost:8000`
+- Database → local SQLite or local PostgreSQL
+- ML models → files on your disk
+
+**Deployment** means moving all of this to **remote servers** that run 24/7, accessible via the internet.
+
+### 1.2 The Typical Full-Stack ML Application Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    USER'S BROWSER                        │
+│                                                         │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │  React / Vue / Next.js Frontend                  │   │
+│  │  (HTML, CSS, JS — static files)                  │   │
+│  └────────────────────┬────────────────────────────┘   │
+└───────────────────────┼─────────────────────────────────┘
+                        │ HTTPS API calls
+                        ▼
+┌─────────────────────────────────────────────────────────┐
+│              BACKEND SERVER (FastAPI/Flask)              │
+│                                                         │
+│  ┌──────────┐ ┌──────────┐ ┌───────────┐ ┌──────────┐ │
+│  │ API      │ │ ML Model │ │ File      │ │ Auth     │ │
+│  │ Routes   │ │ Inference│ │ Processing│ │ Logic    │ │
+│  └────┬─────┘ └────┬─────┘ └─────┬─────┘ └────┬─────┘ │
+└───────┼────────────┼─────────────┼─────────────┼───────┘
+        │            │             │             │
+        ▼            ▼             ▼             ▼
+   ┌─────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
+   │Database │ │Model     │ │Cloud     │ │External  │
+   │(Supabase│ │Weights   │ │Storage   │ │APIs      │
+   │ Neon,   │ │(.pt,.h5  │ │(S3,IPFS) │ │(Pinata,  │
+   │ PG)     │ │.onnx)    │ │          │ │ Stripe)  │
+   └─────────┘ └──────────┘ └──────────┘ └──────────┘
+```
+
+### 1.3 Where Does Each Piece Go?
+
+| Component | What It Is | Where to Deploy | Why |
+|-----------|-----------|----------------|-----|
+| **Frontend** | Static HTML/CSS/JS files | Vercel, Netlify, Cloudflare Pages | Free, fast CDN, auto-HTTPS |
+| **Backend** | Python API server | Railway, Render, Fly.io, AWS EC2 | Needs persistent process, RAM, CPU |
+| **ML Models** | Large binary files (.pt, .h5) | Cloud storage, Volumes, HuggingFace | Too large for Git, need fast disk |
+| **Database** | Structured data storage | Supabase, Neon, PlanetScale, RDS | Managed = automatic backups |
+| **File Storage** | User uploads, generated images | S3, Cloudflare R2, Supabase Storage | Persistent, CDN-backed |
+
+### 1.4 Local vs Production — Key Differences
+
+| Aspect | Local Development | Production |
+|--------|------------------|------------|
+| **URL** | `localhost:8000` | `https://api.yourapp.com` |
+| **HTTPS** | No (HTTP) | Yes (required) |
+| **Secrets** | `.env` file on disk | Platform env vars (encrypted) |
+| **Database** | Local/dev instance | Managed remote DB |
+| **Model files** | Local disk | Cloud storage / volumes |
+| **CORS** | `*` (allow all) | Specific origins only |
+| **Logging** | Console output | Structured logging + monitoring |
+| **Errors** | Stack traces in browser | Generic error messages |
+| **Auto-restart** | Manual | Automatic crash recovery |
+| **Scale** | Single machine | Can scale horizontally |
+
+---
+
+## 2. Phase 0: Prerequisites & Accounts
+
+### 2.1 Accounts You Need
+
+Set up these accounts BEFORE you start:
+
+| Service | Purpose | Free Tier | Sign Up |
+|---------|---------|-----------|---------|
+| **GitHub** | Code hosting, CI/CD | Unlimited public repos | [github.com](https://github.com) |
+| **Vercel** | Frontend hosting | 100 GB bandwidth/mo | [vercel.com](https://vercel.com) |
+| **Railway** | Backend + Docker hosting | $5 trial credit | [railway.app](https://railway.app) |
+| **Supabase** | PostgreSQL database | 500 MB DB, 2 projects | [supabase.com](https://supabase.com) |
+| **Docker Hub** | Container registry (optional) | 1 private repo | [hub.docker.com](https://hub.docker.com) |
+
+### 2.2 Tools You Need Installed Locally
+
+```bash
+# ── Essential ────────────────────────────────────
+git --version          # Git (version control)
+node --version         # Node.js (for frontend builds)
+npm --version          # npm (JS package manager)
+python --version       # Python 3.9+ (for backend)
+pip --version          # pip (Python package manager)
+
+# ── Recommended ──────────────────────────────────
+docker --version       # Docker (for containerization)
+docker compose version # Docker Compose (for local orchestration)
+
+# ── Optional (for specific platforms) ────────────
+railway --version      # Railway CLI
+vercel --version       # Vercel CLI
+```
+
+### 2.3 Install Platform CLIs
+
+```bash
+# Railway CLI
+npm install -g @railway/cli
+railway login
+
+# Vercel CLI
+npm install -g vercel
+vercel login
+
+# Or use npm in specific commands with npx:
+npx vercel deploy
+```
+
+---
+
+## 3. Phase 1: Audit Your Project
+
+Before deploying ANYTHING, audit your entire project for issues.
+
+### 3.1 The Security Audit
+
+**Search for hardcoded secrets in your codebase:**
+
+```bash
+# Search for common secret patterns
+grep -rn "password" --include="*.py" --include="*.js" --include="*.env"
+grep -rn "secret" --include="*.py" --include="*.js"
+grep -rn "api_key" --include="*.py" --include="*.js"
+grep -rn "eyJ" .  # JWT tokens start with eyJ (base64 of {"alg":...)
+grep -rn "sk-" .   # OpenAI keys start with sk-
+grep -rn "AKIA" .  # AWS access keys start with AKIA
+```
+
+**Check what's tracked by Git:**
+
+```bash
+# Show all tracked files
+git ls-files
+
+# Show files that SHOULD be ignored but aren't
+git ls-files --cached --ignored --exclude-standard
+
+# Check if .env is tracked (BAD!)
+git ls-files | grep ".env"
+
+# Check if model files are tracked (BAD for large files!)
+git ls-files | grep -E "\.(pt|pth|h5|onnx|pkl|bin|safetensors)$"
+```
+
+### 3.2 The Dependency Audit
+
+**Verify ALL imports have corresponding requirements:**
+
+```bash
+# Python: Find all imports
+grep -rn "^import \|^from " --include="*.py" | \
+  grep -v "__pycache__" | \
+  grep -v ".venv" | \
+  sort -u
+
+# Compare against requirements.txt — any missing?
+cat requirements.txt
+```
+
+**Common missing dependencies checklist:**
+
+| Import | Package Name | Often Forgotten? |
+|--------|-------------|-----------------|
+| `import requests` | `requests` | ✅ Very common |
+| `from dotenv import load_dotenv` | `python-dotenv` | ✅ Very common |
+| `from cryptography.fernet import Fernet` | `cryptography` | ✅ Very common |
+| `import redis` | `redis` | Sometimes |
+| `import celery` | `celery` | Sometimes |
+| `from supabase import create_client` | `supabase` | Sometimes |
+| `import boto3` | `boto3` | Sometimes |
+| `from pydantic import BaseModel` | `pydantic` | Comes with FastAPI |
+
+### 3.3 The File Size Audit
+
+```bash
+# Find all files larger than 10 MB
+find . -size +10M -not -path "./.git/*" -not -path "./.venv/*" -not -path "*/node_modules/*"
+
+# Or on Windows PowerShell:
+Get-ChildItem -Recurse | Where-Object { $_.Length -gt 10MB -and $_.FullName -notmatch '\.git|\.venv|node_modules' } | Select-Object FullName, @{N='MB';E={[math]::Round($_.Length/1MB,1)}}
+```
+
+**Rules:**
+- Files > 100 MB: **CANNOT** be pushed to GitHub (hard limit)
+- Files > 50 MB: GitHub will warn you
+- Files > 10 MB: Consider using LFS or external storage
+- `.pt`, `.h5`, `.onnx`, `.pkl` files: Almost always too large for Git
+
+### 3.4 The Structure Audit
+
+Verify your project has clean separation:
+
+```
+your-project/
+├── frontend/          # Frontend code (React/Vue/Svelte)
+│   ├── src/
+│   ├── package.json
+│   ├── vite.config.js
+│   └── .env.example   # ← MUST have this
+├── backend/           # Backend code (FastAPI/Flask/Django)
+│   ├── main.py
+│   ├── requirements.txt
+│   ├── Dockerfile      # ← MUST create this
+│   ├── .dockerignore   # ← MUST create this
+│   ├── .env.example    # ← MUST have this
+│   └── utils/
+├── .gitignore          # ← Root-level, covers whole project
+├── README.md
+└── docker-compose.yml  # ← Optional, for local dev
+```
+
+---
+
+## 4. Phase 2: Environment Variables & Secrets Management
+
+### 4.1 The Golden Rule
+
+> **NEVER commit secrets to Git. NEVER. Not even once.**
+>
+> If you commit a secret and then delete it, it's still in Git history forever.
+> Anyone who clones the repo can see it with `git log -p`.
+
+### 4.2 What Belongs in Environment Variables
+
+| Category | Examples | Where Stored |
+|----------|----------|-------------|
+| **Database credentials** | DB URL, password, connection string | Platform env vars |
+| **API keys** | OpenAI key, Stripe key, Pinata JWT | Platform env vars |
+| **Encryption keys** | Fernet keys, JWT signing secrets | Platform env vars |
+| **Service URLs** | Backend URL, webhook URLs | Platform env vars |
+| **Feature flags** | `ENABLE_GPU=1`, `DEBUG=0` | Platform env vars |
+| **Model paths** | Path to model weights on disk | Platform env vars |
+| **CORS origins** | Allowed frontend URLs | Platform env vars |
+
+### 4.3 The `.env` File Pattern
+
+**`.env`** — Your LOCAL secrets (never committed):
+```env
+DATABASE_URL=postgresql://user:pass@localhost:5432/mydb
+SECRET_KEY=my-super-secret-key-12345
+API_KEY=sk-abc123def456
+```
+
+**`.env.example`** — The TEMPLATE (committed to Git):
+```env
+DATABASE_URL=postgresql://user:pass@host:5432/dbname
+SECRET_KEY=your_secret_key_here
+API_KEY=your_api_key_here
+```
+
+**`.gitignore`** — Blocks `.env` from being pushed:
+```gitignore
+.env
+*.env
+!.env.example
+```
+
+### 4.4 Loading Environment Variables in Python
+
+```python
+# ── In your main.py / app.py ────────────────────
+import os
+
+# Method 1: python-dotenv (recommended)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # reads .env file into os.environ
+except ImportError:
+    pass  # In production, env vars come from the platform
+
+# Method 2: Direct access (always works)
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///local.db")
+SECRET_KEY = os.environ.get("SECRET_KEY", "dev-only-insecure-key")
+```
+
+### 4.5 Loading Environment Variables in JavaScript (Vite)
+
+```javascript
+// Vite exposes env vars prefixed with VITE_
+const API_URL = import.meta.env.VITE_API_BASE_URL || '';
+const APP_NAME = import.meta.env.VITE_APP_NAME || 'My App';
+```
+
+> [!WARNING]
+> **Vite rule:** Only variables starting with `VITE_` are exposed to the browser.
+> This is a security feature — server-side secrets without the `VITE_` prefix are NEVER sent to the client.
+
+### 4.6 What to Do If You Already Committed Secrets
+
+**Step 1: Rotate the secret immediately**
+- Go to the service dashboard (Supabase, Pinata, OpenAI, etc.)
+- Revoke the old key
+- Generate a new key
+- Update your platform env vars with the new key
+
+**Step 2: Remove from Git history (optional but recommended)**
+
+```bash
+# Option A: BFG Repo Cleaner (easiest)
+# Download from https://rtyley.github.io/bfg-repo-cleaner/
+java -jar bfg.jar --delete-files "secret_file.txt" your-repo.git
+java -jar bfg.jar --replace-text replacements.txt your-repo.git
+
+# Option B: git filter-branch (built-in but slower)
+git filter-branch --force --index-filter \
+  "git rm --cached --ignore-unmatch path/to/secret_file" \
+  --prune-empty --tag-name-filter cat -- --all
+
+# Option C: Start fresh (nuclear option for small projects)
+# Delete .git, reinitialize, push as new repo
+```
+
+---
+
+## 5. Phase 3: Dependency Management
+
+### 5.1 Python Backend Dependencies
+
+**Creating `requirements.txt`:**
+
+```bash
+# Method 1: From your virtual environment (captures everything installed)
+pip freeze > requirements.txt
+
+# Method 2: Manual curation (recommended — cleaner)
+# Write only what you actually import, with version ranges
+```
+
+**Example well-organized `requirements.txt`:**
+
+```txt
+# ── Web Framework ────────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# ── Environment ──────────────────────────────────
+python-dotenv>=1.0.0
+
+# ── ML / Inference ───────────────────────────────
+torch
+torchvision
+ultralytics
+transformers>=4.35.0
+opencv-python-headless
+Pillow
+numpy
+
+# ── Database ─────────────────────────────────────
+sqlalchemy>=2.0.0
+# OR: supabase>=2.0.0
+# OR: psycopg2-binary>=2.9.0
+
+# ── HTTP Clients ─────────────────────────────────
+requests>=2.31.0
+httpx>=0.27.0
+
+# ── Security / Encryption ───────────────────────
+cryptography>=42.0.0
+
+# ── Data Processing ─────────────────────────────
+pandas>=2.0.0
+scikit-learn>=1.3.0
+```
+
+> [!TIP]
+> **Use `>=` instead of `==` for version pinning.** Exact pinning (`==`) causes dependency conflicts more often. Range pinning (`>=`) allows compatible updates.
+
+### 5.2 Frontend Dependencies
+
+Your `package.json` handles this automatically. But verify:
+
+```bash
+cd frontend
+npm install        # Install all deps
+npm run build      # Test that the build works
+```
+
+### 5.3 System-Level Dependencies
+
+Some Python packages need system libraries (C/C++ headers). These must be installed in Docker:
+
+| Python Package | System Dependency | Dockerfile Command |
+|---------------|-------------------|-------------------|
+| `opencv-python-headless` | libgl, libglib | `apt-get install libgl1-mesa-glx libglib2.0-0` |
+| `Pillow` | libjpeg, libpng | Usually pre-installed in Python image |
+| `psycopg2` | libpq-dev | `apt-get install libpq-dev` |
+| `PyMuPDF (fitz)` | none (self-contained) | — |
+| `cryptography` | libffi, openssl | Usually pre-installed in Python image |
+| `scipy` | libopenblas | `apt-get install libopenblas-dev` |
+
+---
+
+## 6. Phase 4: Dockerizing the Backend
+
+### 6.1 Why Docker?
+
+Docker packages your app + ALL its dependencies into a single **container** that runs identically everywhere — your laptop, Railway, AWS, anywhere.
+
+Without Docker:
+```
+"It works on my machine" → breaks on server (different OS, Python version, missing libraries)
+```
+
+With Docker:
+```
+"It works in my container" → works everywhere (container IS the machine)
+```
+
+### 6.2 Dockerfile Anatomy — Line by Line
+
+```dockerfile
+# ═══════════════════════════════════════════════════════════
+# STAGE: Base Image
+# ═══════════════════════════════════════════════════════════
+# Choose your base image. Options:
+#   python:3.11        → Full Debian (1.0 GB) — all tools included
+#   python:3.11-slim   → Slim Debian (150 MB) — most common choice
+#   python:3.11-alpine → Alpine Linux (50 MB) — smallest but can break C extensions
+#
+# For ML projects, use SLIM (not Alpine) — Alpine breaks numpy/scipy/torch
+FROM python:3.11-slim
+
+# ═══════════════════════════════════════════════════════════
+# STAGE: System Dependencies
+# ═══════════════════════════════════════════════════════════
+# Install OS-level packages that Python libs need
+# Always combine in one RUN to reduce layer count
+# Always clean apt cache at the end to reduce image size
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # OpenCV needs these:
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    # OpenMP (parallel processing):
+    libgomp1 \
+    # Health check:
+    curl \
+    # Clean up:
+    && rm -rf /var/lib/apt/lists/*
+
+# ═══════════════════════════════════════════════════════════
+# STAGE: Working Directory
+# ═══════════════════════════════════════════════════════════
+WORKDIR /app
+
+# ═══════════════════════════════════════════════════════════
+# STAGE: Python Dependencies (cached layer)
+# ═══════════════════════════════════════════════════════════
+# Copy ONLY requirements.txt first. Docker caches this layer.
+# If requirements.txt hasn't changed, Docker reuses the cache
+# and skips pip install entirely → MUCH faster builds.
+COPY requirements.txt .
+
+# Install Python packages
+# --no-cache-dir: Don't cache pip downloads (saves disk)
+# CPU-only PyTorch: Saves ~1.5 GB vs CUDA version
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+        torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir -r requirements.txt
+
+# ═══════════════════════════════════════════════════════════
+# STAGE: Application Code
+# ═══════════════════════════════════════════════════════════
+# Copy everything else. This layer changes on every code change.
+COPY . .
+
+# Create directories that the app writes to at runtime
+RUN mkdir -p /app/outputs /app/logs /app/uploads
+
+# ═══════════════════════════════════════════════════════════
+# STAGE: Runtime Configuration
+# ═══════════════════════════════════════════════════════════
+# Document which port the app listens on (informational only)
+EXPOSE 8000
+
+# Health check — platform uses this to know when the app is ready
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8000}/api/health || exit 1
+
+# Start command — Railway/Render set $PORT automatically
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+```
+
+### 6.3 The `.dockerignore` File
+
+Like `.gitignore` but for Docker builds. Prevents unnecessary files from entering the container:
+
+```dockerignore
+# Version control
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment files (secrets come from platform env vars)
+.env
+.env.*
+!.env.example
+
+# Runtime artifacts (created at runtime inside container)
+outputs/
+logs/
+uploads/
+audit_logs/
+
+# Tests (not needed in production)
+tests/
+test_*/
+*_test.py
+test_*.py
+
+# Documentation
+*.md
+docs/
+
+# Large files that should be mounted as volumes
+*.pt
+*.pth
+*.h5
+*.onnx
+*.pkl
+*.safetensors
+
+# Misc
+*.log
+*.tmp
+```
+
+### 6.4 Building & Testing Locally
+
+```bash
+# Build the Docker image
+docker build -t my-backend .
+
+# Run with env vars from .env file
+docker run -p 8000:8000 --env-file .env my-backend
+
+# Test it
+curl http://localhost:8000/api/health
+
+# Interactive shell inside the container (for debugging)
+docker run -it --entrypoint bash my-backend
+
+# Check image size
+docker images my-backend
+```
+
+### 6.5 Multi-Stage Builds (Advanced — Smaller Images)
+
+```dockerfile
+# Stage 1: Build dependencies
+FROM python:3.11-slim AS builder
+WORKDIR /build
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# Stage 2: Runtime (only includes what's needed)
+FROM python:3.11-slim
+COPY --from=builder /install /usr/local
+WORKDIR /app
+COPY . .
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+---
+
+## 7. Phase 5: Handling Large ML Model Files
+
+### 7.1 The Problem
+
+ML model files are typically 50 MB–10 GB. Git has a 100 MB file limit. Even if you could push them, it would make cloning painfully slow.
+
+### 7.2 Strategy Decision Matrix
+
+| Strategy | Best For | Pros | Cons |
+|----------|---------|------|------|
+| **Git LFS** | Teams, < 2 GB total | Simple, version controlled | Bandwidth limits, costs money |
+| **Cloud Storage Download** | Any size, CI/CD | Unlimited size, cheap | Slow cold starts |
+| **Platform Volumes** | Railway, Fly.io | Fast disk, persistent | Platform-specific |
+| **HuggingFace Hub** | Public models | Free, community standard | Public by default |
+| **Docker Image Bake** | Small models (< 500 MB) | Simple, predictable | Huge Docker images |
+
+### 7.3 Strategy A: Git LFS (Git Large File Storage)
+
+```bash
+# Install Git LFS
+git lfs install
+
+# Track large file types
+git lfs track "*.pt"
+git lfs track "*.pth"
+git lfs track "*.h5"
+git lfs track "*.onnx"
+git lfs track "*.safetensors"
+
+# This creates/modifies .gitattributes
+git add .gitattributes
+git commit -m "Track model files with Git LFS"
+
+# Now git add/commit/push works normally for large files
+git add model/best.pt
+git commit -m "Add YOLO model weights"
+git push
+```
+
+**Limits:**
+- GitHub Free: 1 GB storage, 1 GB bandwidth/month
+- GitHub Pro: 2 GB storage, 2 GB bandwidth/month
+- Extra packs: $5/month for 50 GB
+
+### 7.4 Strategy B: Download on Startup
+
+Create a download script that runs before your server starts:
+
+```python
+# download_models.py
+import os
+import urllib.request
+import hashlib
+
+MODELS = {
+    "model/best.pt": {
+        "url": "https://your-storage.com/models/best.pt",
+        "sha256": "abc123...",  # Optional: verify integrity
+        "size_mb": 108,
+    },
+    "model/sam2_b.pt": {
+        "url": "https://huggingface.co/your-org/your-model/resolve/main/sam2_b.pt",
+        "sha256": "def456...",
+        "size_mb": 162,
+    },
+}
+
+def download_file(url, dest, expected_hash=None):
+    """Download a file with progress indication."""
+    if os.path.exists(dest):
+        print(f"✓ {dest} already exists, skipping download")
+        return
+
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    print(f"⬇ Downloading {dest} ...")
+    urllib.request.urlretrieve(url, dest)
+
+    if expected_hash:
+        actual = hashlib.sha256(open(dest, 'rb').read()).hexdigest()
+        assert actual == expected_hash, f"Hash mismatch for {dest}"
+
+    print(f"✓ {dest} downloaded successfully")
+
+if __name__ == "__main__":
+    for path, info in MODELS.items():
+        download_file(info["url"], path, info.get("sha256"))
+```
+
+**Dockerfile update:**
+```dockerfile
+COPY download_models.py .
+CMD ["sh", "-c", "python download_models.py && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+```
+
+**Where to host model files for download:**
+- **Google Drive** (free, but rate-limited for popular files)
+- **HuggingFace Hub** (free, designed for ML models)
+- **AWS S3** or **Cloudflare R2** (cheap, fast, reliable)
+- **GitHub Releases** (free, 2 GB per file limit)
+
+### 7.5 Strategy C: Platform Volumes (Railway)
+
+```bash
+# Create and mount a volume in Railway
+# Dashboard → Service → Settings → Volumes → Add Volume
+# Mount path: /app/models
+
+# Upload files to volume via Railway CLI
+railway volume upload model/best.pt /app/models/best.pt
+
+# Set env var to point to volume path
+MODEL_PATH=/app/models/best.pt
+```
+
+### 7.6 Strategy D: HuggingFace Hub
+
+```python
+# Download from HuggingFace at runtime
+from huggingface_hub import hf_hub_download
+
+model_path = hf_hub_download(
+    repo_id="your-org/your-model",
+    filename="best.pt",
+    cache_dir="./model"
+)
+```
+
+---
+
+## 8. Phase 6: Database Setup for Production
+
+### 8.1 Local vs Production Database
+
+| Feature | Local (SQLite) | Production (PostgreSQL) |
+|---------|---------------|------------------------|
+| Setup | Zero config | Managed service |
+| Concurrent users | 1 | Thousands |
+| Data persistence | File on disk | Remote server with backups |
+| Size limit | ~140 TB (theoretical) | Plan-dependent |
+| Speed | Very fast (local) | Network latency, but optimized |
+
+### 8.2 Supabase Setup (PostgreSQL)
+
+**Step 1: Create Project**
+1. Go to [supabase.com](https://supabase.com)
+2. New Project → choose region closest to your backend
+3. Save the **URL** and **anon key**
+
+**Step 2: Create Tables**
+Use the SQL Editor in Supabase Dashboard:
+
+```sql
+-- Example: Users table
+CREATE TABLE public.users (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    email text NOT NULL UNIQUE,
+    name text,
+    created_at timestamptz DEFAULT now(),
+    CONSTRAINT users_pkey PRIMARY KEY (id)
+);
+
+-- Example: Audit logs table
+CREATE TABLE public.audit_logs (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    request_id text NOT NULL,
+    status text NOT NULL,
+    data jsonb,
+    created_at timestamptz DEFAULT now(),
+    CONSTRAINT audit_logs_pkey PRIMARY KEY (id)
+);
+
+-- Enable Row Level Security (important!)
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
+```
+
+**Step 3: Connect from Python**
+
+```python
+# Option A: Direct REST API (no SDK needed)
+import requests
+import os
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+def query_table(table, filters=""):
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+    }
+    url = f"{SUPABASE_URL}/rest/v1/{table}?{filters}"
+    return requests.get(url, headers=headers).json()
+
+# Option B: Supabase Python SDK
+from supabase import create_client
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+data = supabase.table("users").select("*").execute()
+```
+
+### 8.3 Database Migration Files
+
+Always keep your schema in SQL files under version control:
+
+```
+db/
+├── 001_initial_schema.sql
+├── 002_add_audit_logs.sql
+├── 003_add_transactions.sql
+└── README.md
+```
+
+---
+
+## 9. Phase 7: Backend Deployment (Railway)
+
+### 9.1 Railway Deployment Flow
+
+```mermaid
+graph LR
+    A[Push to GitHub] --> B[Railway detects change]
+    B --> C[Builds Docker image]
+    C --> D[Deploys container]
+    D --> E[Health check passes]
+    E --> F[Traffic routes to new version]
+```
+
+### 9.2 Step-by-Step
+
+**Step 1: Create Railway Project**
+```
+1. Go to railway.app/new
+2. "Deploy from GitHub Repo"
+3. Select your repo
+4. Set Root Directory to your backend folder (e.g., "backend" or "Model_Backend")
+```
+
+**Step 2: Configure Build**
+```
+Service → Settings:
+  Root Directory:    backend/
+  Builder:           Dockerfile
+  Dockerfile Path:   ./Dockerfile
+```
+
+**Step 3: Add Environment Variables**
+```
+Service → Variables → Add all your secrets:
+  SUPABASE_URL=...
+  SUPABASE_KEY=...
+  ENCRYPTION_KEY=...
+  PINATA_JWT=...
+  ALLOWED_ORIGINS=https://your-frontend.vercel.app
+  MODEL_PATH=model/best.pt
+  ENABLE_GPU=0
+```
+
+**Step 4: Generate a Public URL**
+```
+Service → Settings → Networking → Generate Domain
+→ You get: https://your-app-production.up.railway.app
+```
+
+**Step 5: Verify**
+```bash
+curl https://your-app-production.up.railway.app/api/health
+```
+
+### 9.3 The `railway.toml` Config File
+
+```toml
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "./Dockerfile"
+
+[deploy]
+startCommand = "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"
+healthcheckPath = "/api/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+```
+
+### 9.4 Alternative: Render.com
+
+```yaml
+# render.yaml
+services:
+  - type: web
+    name: my-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+```
+
+---
+
+## 10. Phase 8: Frontend Deployment (Vercel)
+
+### 10.1 Vercel Deployment Flow
+
+```mermaid
+graph LR
+    A[Push to GitHub] --> B[Vercel detects change]
+    B --> C[npm install]
+    C --> D[npm run build]
+    D --> E[Upload dist/ to CDN]
+    E --> F[Available globally via HTTPS]
+```
+
+### 10.2 Step-by-Step
+
+**Step 1: Connect to Vercel**
+```
+1. vercel.com/new
+2. Import your GitHub repo
+3. Set Root Directory: frontend/ (or Frontend/)
+```
+
+**Step 2: Configure Build**
+```
+Framework Preset:    Vite (auto-detected)
+Build Command:       npm run build
+Output Directory:    dist
+Install Command:     npm install
+Node.js Version:     18.x or 20.x
+```
+
+**Step 3: Add Environment Variables**
+```
+VITE_API_BASE_URL = https://your-backend.railway.app
+```
+
+**Step 4: Deploy**
+- Click "Deploy"
+- Wait 1–2 minutes
+- Get your URL: `https://your-app.vercel.app`
+
+### 10.3 Custom Domain Setup
+
+```
+1. Vercel Dashboard → Project → Settings → Domains
+2. Add: app.yourdomain.com
+3. Add DNS records at your registrar:
+   Type: CNAME
+   Name: app
+   Value: cname.vercel-dns.com
+4. Wait for DNS propagation (5–60 min)
+```
+
+---
+
+## 11. Phase 9: Connecting Frontend ↔ Backend
+
+### 11.1 The CORS Problem
+
+When your frontend (`https://app.vercel.app`) calls your backend (`https://api.railway.app`), the browser blocks the request by default because they're on different domains. This is **CORS** (Cross-Origin Resource Sharing).
+
+**Solution — Backend must allow the frontend origin:**
+
+```python
+import os
+from fastapi.middleware.cors import CORSMiddleware
+
+ALLOWED_ORIGINS = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:5173"
+).split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,  # ← Your Vercel URL goes here
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+### 11.2 Two Approaches for API URLs
+
+**Approach A: Environment Variable (Recommended)**
+
+Frontend reads the backend URL from an env var:
+```javascript
+// src/api/client.js
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+
+export async function apiCall(endpoint, options = {}) {
+    const url = `${API_BASE}${endpoint}`;
+    const response = await fetch(url, options);
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    return response.json();
+}
+```
+
+**Approach B: Vercel Rewrites (Proxy)**
+
+Vercel proxies `/api/*` requests to your backend:
+```json
+// vercel.json
+{
+    "rewrites": [
+        {
+            "source": "/api/:path*",
+            "destination": "https://your-backend.railway.app/api/:path*"
+        }
+    ]
+}
+```
+
+**Which to choose?**
+| Criteria | Env Var | Rewrite |
+|----------|---------|---------|
+| Setup difficulty | Easy | Easy |
+| CORS needed? | Yes | No (same-origin!) |
+| Extra network hop | No | Yes (Vercel → Backend) |
+| Latency | Lower | Slightly higher |
+| Best for | Most projects | Avoiding CORS issues |
+
+---
+
+## 12. Phase 10: External Services Integration
+
+### 12.1 Checklist for Any External Service
+
+For EVERY external service your app uses:
+
+1. ✅ API key/credentials stored in env vars (not in code)
+2. ✅ Timeout configured (don't hang forever)
+3. ✅ Error handling (what if service is down?)
+4. ✅ Rate limiting awareness (don't get blocked)
+5. ✅ Fallback behavior (graceful degradation)
+
+### 12.2 Common External Services Pattern
+
+```python
+import os
+import logging
+import requests
+
+logger = logging.getLogger(__name__)
+
+class ExternalServiceClient:
+    """Template for any external service integration."""
+
+    def __init__(self):
+        self.api_key = os.environ.get("SERVICE_API_KEY", "")
+        self.base_url = os.environ.get("SERVICE_URL", "https://api.service.com")
+        self.timeout = int(os.environ.get("SERVICE_TIMEOUT", "30"))
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.api_key and self.api_key != "your_key_here")
+
+    def call_api(self, endpoint: str, data: dict) -> dict | None:
+        if not self.is_configured:
+            logger.warning("Service not configured, skipping")
+            return None
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/{endpoint}",
+                json=data,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.Timeout:
+            logger.error("Service timed out after %ds", self.timeout)
+            return None
+        except requests.exceptions.HTTPError as e:
+            logger.error("Service returned error: %s", e)
+            return None
+        except Exception as e:
+            logger.error("Service call failed: %s", e)
+            return None
+```
+
+### 12.3 IPFS / Pinata Integration
+
+```python
+PINATA_JWT = os.environ.get("PINATA_JWT", "")
+PINATA_GATEWAY = os.environ.get("PINATA_GATEWAY_URL", "https://gateway.pinata.cloud/ipfs")
+
+def upload_to_ipfs(data: dict, name: str = "upload") -> str | None:
+    if not PINATA_JWT:
+        logger.warning("PINATA_JWT not configured")
+        return None
+
+    response = requests.post(
+        "https://api.pinata.cloud/pinning/pinJSONToIPFS",
+        json={"pinataContent": data, "pinataMetadata": {"name": name}},
+        headers={"Authorization": f"Bearer {PINATA_JWT}"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json().get("IpfsHash")
+```
+
+---
+
+## 13. Phase 11: Security Hardening
+
+### 13.1 Security Checklist
+
+| # | Item | Priority | How to Check |
+|---|------|----------|-------------|
+| 1 | No secrets in Git | 🔴 Critical | `grep -rn "password\|secret\|api_key" .` |
+| 2 | CORS locked to specific origins | 🔴 Critical | Check `allow_origins` in app code |
+| 3 | HTTPS everywhere | 🔴 Critical | Vercel/Railway auto-provide this |
+| 4 | Input validation on all endpoints | 🟡 High | Review all API endpoints |
+| 5 | File upload size limits | 🟡 High | Check FastAPI UploadFile config |
+| 6 | Rate limiting | 🟡 High | Use `slowapi` or platform-level |
+| 7 | Error messages don't leak internals | 🟡 High | No stack traces in production |
+| 8 | Database access scoped (RLS) | 🟡 High | Check Supabase RLS policies |
+| 9 | Dependencies up to date | 🟢 Medium | `pip audit` / `npm audit` |
+| 10 | Logging doesn't contain secrets | 🟢 Medium | Review all `logger.*` calls |
+
+### 13.2 CORS Configuration
+
+```python
+# ❌ BAD — allows any website to call your API
+allow_origins=["*"]
+
+# ✅ GOOD — only your frontend can call your API
+allow_origins=["https://myapp.vercel.app", "https://myapp.com"]
+
+# ✅ BEST — configurable via env var
+allow_origins=os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+```
+
+### 13.3 Rate Limiting
+
+```python
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
+@app.post("/api/analyze")
+@limiter.limit("10/minute")
+async def analyze(request: Request, file: UploadFile):
+    ...
+```
+
+### 13.4 File Upload Security
+
+```python
+# Maximum upload sizes
+MAX_IMAGE_SIZE = 10 * 1024 * 1024   # 10 MB
+MAX_PDF_SIZE = 20 * 1024 * 1024     # 20 MB
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+ALLOWED_PDF_TYPES = {"application/pdf"}
+
+@app.post("/api/upload")
+async def upload(file: UploadFile):
+    # Check content type
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(400, "Invalid file type")
+
+    # Check file size
+    contents = await file.read()
+    if len(contents) > MAX_IMAGE_SIZE:
+        raise HTTPException(400, "File too large (max 10 MB)")
+
+    await file.seek(0)  # Reset for downstream use
+    ...
+```
+
+---
+
+## 14. Phase 12: Monitoring, Logging & Debugging
+
+### 14.1 Structured Logging
+
+```python
+import logging
+import json
+
+# JSON-formatted logs (easier to parse in production)
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        return json.dumps({
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "module": record.module,
+        })
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+```
+
+### 14.2 Health Check Endpoint
+
+Every production backend MUST have a health check:
+
+```python
+@app.get("/api/health")
+def health():
+    """Platform uses this to know if the app is running."""
+    return {
+        "status": "ok",
+        "version": "1.0.0",
+        "model_loaded": _detector is not None,
+    }
+```
+
+### 14.3 Viewing Logs on Railway
+
+```bash
+# Via CLI
+railway logs
+
+# Or: Railway Dashboard → Service → Deployments → View Logs
+```
+
+### 14.4 Common Debugging Steps
+
+```bash
+# 1. Check if the server is running
+curl https://your-backend.railway.app/api/health
+
+# 2. Check recent logs
+railway logs --tail 100
+
+# 3. SSH into the container (Railway)
+railway shell
+
+# 4. Check environment variables are set
+railway variables
+
+# 5. Check disk space / memory
+railway metrics
+```
+
+---
+
+## 15. Phase 13: CI/CD Automation
+
+### 15.1 GitHub Actions for Auto-Deploy
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r backend/requirements.txt
+      - run: cd backend && python -m pytest tests/ -v
+
+  deploy-backend:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm i -g @railway/cli
+      - run: cd backend && railway up
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+  deploy-frontend:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm i -g vercel
+      - run: cd frontend && vercel --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+```
+
+### 15.2 Auto-Deploy Without CI/CD
+
+Both Vercel and Railway support **auto-deploy from GitHub** — every push to `main` triggers a new deployment automatically. No CI/CD config needed.
+
+```
+1. Connect your GitHub repo to Railway/Vercel
+2. Set the branch to watch: main
+3. Push code → auto deploys
+```
+
+---
+
+## 16. Phase 14: Scaling & Performance
+
+### 16.1 When to Scale
+
+| Symptom | Likely Cause | Solution |
+|---------|-------------|----------|
+| Slow API responses | ML model inference time | GPU backend, or async queue |
+| Server crashes | Out of memory (OOM) | Increase RAM, optimize model |
+| 502/503 errors | Too many concurrent requests | Scale horizontally (more instances) |
+| Cold start lag | Container starting up | Keep-alive pings, pre-warm |
+
+### 16.2 CPU vs GPU for ML Inference
+
+| Metric | CPU | GPU |
+|--------|-----|-----|
+| Cost | $5–20/mo | $50–500/mo |
+| Inference speed | 2–10 seconds per image | 0.1–1 second per image |
+| Best for | Prototypes, low traffic | Production, high traffic |
+| Providers | Railway, Render, Fly.io | RunPod, Modal, Lambda Cloud |
+
+### 16.3 Async Processing for Heavy ML Tasks
+
+```python
+from fastapi import BackgroundTasks
+
+@app.post("/api/analyze")
+async def analyze(file: UploadFile, background_tasks: BackgroundTasks):
+    # Quick response — don't make the user wait
+    request_id = str(uuid.uuid4())
+
+    # Run heavy ML inference in background
+    background_tasks.add_task(run_ml_pipeline, request_id, file)
+
+    return {"request_id": request_id, "status": "processing"}
+
+@app.get("/api/results/{request_id}")
+async def get_results(request_id: str):
+    # Client polls this endpoint until results are ready
+    ...
+```
+
+---
+
+## 17. Phase 15: Cost Management
+
+### 17.1 Free Tier Limits
+
+| Service | Free Tier | Limits |
+|---------|-----------|--------|
+| **Vercel** | Hobby | 100 GB bandwidth, 100 deployments/day |
+| **Railway** | Trial | $5 credit (one-time), then $5/mo Hobby |
+| **Supabase** | Free | 500 MB DB, 1 GB file storage, 2 projects |
+| **Pinata** | Free | 100 files, 1 GB storage |
+| **GitHub** | Free | Unlimited repos, 500 MB LFS |
+
+### 17.2 Estimated Monthly Costs
+
+| Setup | Cost | Good For |
+|-------|------|----------|
+| **Hobby** | $5–15/mo | Side projects, demos, portfolios |
+| **Starter** | $20–50/mo | Small production apps |
+| **Production** | $50–200/mo | Real users, SLAs, GPU inference |
+| **Scale** | $200+/mo | High traffic, multiple services |
+
+### 17.3 Cost Optimization Tips
+
+1. **Use CPU-only PyTorch** in Docker (`--index-url https://download.pytorch.org/whl/cpu`) — saves 1.5 GB image size
+2. **Sleep unused services** — Railway charges per hour of runtime
+3. **Use Cloudflare R2** instead of S3 — no egress fees
+4. **Cache model downloads** — use volumes instead of downloading every restart
+5. **Pick the closest region** — reduces latency and bandwidth costs
+
+---
+
+## 18. Common Errors & Troubleshooting
+
+### 18.1 Build Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `ModuleNotFoundError: No module named 'xyz'` | Missing from requirements.txt | Add `xyz` to requirements.txt |
+| `ERROR: Could not find a version that satisfies the requirement torch==2.1.0+cu118` | CUDA version not available on CPU-only platform | Use `--index-url https://download.pytorch.org/whl/cpu` |
+| `"OSError: libGL.so.1: cannot open shared object file"` | OpenCV needs system libraries | Add `libgl1-mesa-glx` to Dockerfile apt-get |
+| `"error: subprocess-exited-with-error"` during pip install | C extension compilation failed | Use `-headless` variant of package (e.g., `opencv-python-headless`) |
+
+### 18.2 Runtime Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `CORS error` in browser console | Backend doesn't allow frontend origin | Add frontend URL to `ALLOWED_ORIGINS` |
+| `fetch failed` / `ERR_CONNECTION_REFUSED` | Wrong API URL or backend is down | Check `VITE_API_BASE_URL` and backend health |
+| `413 Request Entity Too Large` | Upload exceeds nginx/platform limit | Increase upload limit in platform settings |
+| `OOMKilled` / container crashes | Model too large for available RAM | Increase RAM allocation or use smaller model |
+| `ModuleNotFoundError` at runtime (not build) | Missing optional dependency | Add try/except or add to requirements.txt |
+
+### 18.3 Database Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `relation "xxx" does not exist` | Table not created | Run migration SQL in Supabase |
+| `permission denied for table xxx` | RLS policy blocking access | Check/update RLS policies |
+| `23505: duplicate key value violates unique constraint` | Inserting duplicate data | Add upsert logic or check before insert |
+
+---
+
+## 19. Universal Pre-Deployment Checklist
+
+### 🔒 Security
+- [ ] No secrets in Git (check `git log -p` for history)
+- [ ] `.env` is in `.gitignore`
+- [ ] `.env.example` exists with placeholder values
+- [ ] CORS locked to specific origins (not `*`)
+- [ ] All API keys rotated if ever committed
+- [ ] File upload size limits configured
+- [ ] Error responses don't leak stack traces
+
+### 📦 Dependencies
+- [ ] Every Python import has a matching requirements.txt entry
+- [ ] `pip install -r requirements.txt` works on a fresh venv
+- [ ] `npm install && npm run build` works for frontend
+- [ ] No OS-specific dependencies (e.g., Windows-only packages)
+
+### 🐳 Docker
+- [ ] Dockerfile exists and builds successfully
+- [ ] .dockerignore exists (excludes .git, .venv, node_modules, tests)
+- [ ] Docker image size is reasonable (< 5 GB for ML, < 500 MB for non-ML)
+- [ ] Health check endpoint exists (`/api/health` or `/health`)
+- [ ] Container runs correctly: `docker run -p 8000:8000 --env-file .env my-app`
+
+### ⚙️ Configuration
+- [ ] All hardcoded paths are configurable via env vars
+- [ ] All external service URLs are configurable via env vars
+- [ ] Model paths are configurable via env vars
+- [ ] Default values work for local development
+- [ ] `railway.toml` or `render.yaml` exists
+
+### 🗄️ Database
+- [ ] Migration SQL files exist under version control
+- [ ] All tables created in production database
+- [ ] Connection uses env vars (not hardcoded credentials)
+- [ ] RLS policies configured (if using Supabase)
+
+### 🧪 Testing
+- [ ] Backend health check returns 200
+- [ ] At least one API endpoint tested with curl
+- [ ] Frontend builds without errors
+- [ ] Frontend → Backend connection works end-to-end
+
+### 🚀 Deployment
+- [ ] Backend deployed and health check passes
+- [ ] Frontend deployed and loads correctly
+- [ ] Environment variables set on all platforms
+- [ ] CORS configured with production frontend URL
+- [ ] DNS / custom domain configured (if applicable)
+
+---
+
+## 20. Platform Comparison Cheat Sheet
+
+### Backend Hosting
+
+| Feature | Railway | Render | Fly.io | AWS EC2 |
+|---------|---------|--------|--------|---------|
+| **Difficulty** | Easy | Easy | Medium | Hard |
+| **Docker support** | ✅ | ✅ | ✅ | ✅ |
+| **Free tier** | $5 credit | 750 hrs/mo | 3 shared VMs | 12 months free |
+| **Auto-deploy** | ✅ | ✅ | ✅ | ❌ (needs CI) |
+| **Volumes** | ✅ | ✅ Disk | ✅ Volumes | ✅ EBS |
+| **GPU** | ❌ | ❌ | ✅ (A100) | ✅ (any GPU) |
+| **Custom domain** | ✅ | ✅ | ✅ | ✅ |
+| **Sleep on idle** | Hobby plan sleeps | Free tier sleeps | ❌ | ❌ |
+| **Best for** | ML backends, APIs | Simple APIs | Edge computing | Full control |
+
+### Frontend Hosting
+
+| Feature | Vercel | Netlify | Cloudflare Pages |
+|---------|--------|---------|-----------------|
+| **Difficulty** | Very Easy | Very Easy | Easy |
+| **Framework support** | Vite, Next, React | Vite, React, Vue | Vite, React, Vue |
+| **Free tier** | 100 GB/mo | 100 GB/mo | Unlimited |
+| **Build time** | Fast | Fast | Fast |
+| **Edge functions** | ✅ | ✅ | ✅ (Workers) |
+| **Custom domain** | ✅ | ✅ | ✅ |
+| **Best for** | React/Next.js | Jamstack/static | Budget/speed |
+
+### Database
+
+| Feature | Supabase | Neon | PlanetScale | RDS |
+|---------|----------|------|-------------|-----|
+| **Engine** | PostgreSQL | PostgreSQL | MySQL | Any |
+| **Free tier** | 500 MB | 512 MB | 5 GB | 12 months |
+| **Auth built-in** | ✅ | ❌ | ❌ | ❌ |
+| **REST API** | ✅ (auto) | ❌ | ❌ | ❌ |
+| **Realtime** | ✅ | ❌ | ❌ | ❌ |
+| **Best for** | Full-stack apps | Serverless | High scale | Enterprise |
+
+---
+
+## Quick Reference: The Deployment Order
+
+```
+ 1.  📋  Audit: Check for secrets, missing deps, large files
+ 2.  🔒  Secrets: Move ALL secrets to .env, add .env.example
+ 3.  📦  Dependencies: Verify requirements.txt / package.json complete
+ 4.  🐳  Docker: Create Dockerfile + .dockerignore
+ 5.  🧪  Test Locally: docker build + docker run + curl /health
+ 6.  🗄️  Database: Create tables, test connection
+ 7.  🚂  Deploy Backend: Push to Railway/Render
+ 8.  ✅  Verify Backend: curl /api/health on production URL
+ 9.  ▲   Deploy Frontend: Push to Vercel/Netlify
+10.  🔗  Connect: Set VITE_API_BASE_URL + ALLOWED_ORIGINS
+11.  🎯  E2E Test: Full user flow on production
+12.  📊  Monitor: Set up logging + alerts
+```
+
+---
+
+> [!TIP]
+> **Bookmark this guide.** Every time you start a new project or help a teammate deploy, come back to this checklist. Deployment mistakes are expensive — prevention is free.

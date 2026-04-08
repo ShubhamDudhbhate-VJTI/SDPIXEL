@@ -1,4 +1,4 @@
-# Python
+# ── Python ───────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
@@ -10,47 +10,58 @@ env/
 .pytest_cache/
 .coverage
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+# ── Secrets (CRITICAL — never commit) ───────────
 .env
-
-# ML/Data
-.dvc/
-runs/
-
-# Logs & Output
-*.log
-results/
-reports/
-
-# OS
-.DS_Store
-Thumbs.db
-.directory
-
-# Models (already included)
-*.pt
-
+*.env
+Model_Backend/.env
+Frontend/.env
 /.env
-
-Model_Backend/audit_logs/
-Model_Backend/outputs/
-
-# Sensitive credentials & secrets
 JWT_PINNATA.txt
 *.key
 *.pem
 *.crt
 
-# Test data & binaries
+# ── Large Model Files ───────────────────────────
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+
+# ── IDE ──────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── ML / Data ───────────────────────────────────
+.dvc/
+runs/
+
+# ── Logs & Output ───────────────────────────────
+*.log
+results/
+reports/
+
+# ── OS ───────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.directory
+
+# ── Runtime Artifacts (generated at runtime) ────
+Model_Backend/audit_logs/
+Model_Backend/outputs/
+
+# ── Build Outputs ───────────────────────────────
+Frontend/dist/
+Frontend/node_modules/
+
+# ── Test data & binaries ────────────────────────
 *.pdf
 Model_Backend/test_images/
 PIDray-main/tests/test_data/
 
-# Temporary/backup files
+# ── Temporary / backup files ────────────────────
 *.tmp
 *.bak
 *.orig

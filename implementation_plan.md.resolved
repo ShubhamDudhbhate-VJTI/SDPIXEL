@@ -1,0 +1,196 @@
+# AI Audit System — Implementation Plan (Phase 1: Core Auditing Only)
+
+> No Pinata, no Supabase, no Blockchain. Just the core audit logging system.
+
+## Goal
+
+Build a **generic, decoupled** audit logging system that:
+- Tracks every step of the AI pipeline
+- Saves complete execution logs as JSON files
+- Works regardless of what pipeline it's attached to
+- Has zero dependencies on project-specific code
+
+---
+
+## Proposed Changes
+
+### Component 1: Audit Module
+
+#### [NEW] `audit.py` → `Model_Backend/utils/audit.py`
+
+A single, self-contained Python file with **zero project imports**.
+
+**Class: `AuditTrail`**
+
+| Method | What It Does |
+|--------|-------------|
+| `__init__()` | Creates `request_id` (uuid), `timestamp`, empty `steps[]`, `final_status = "pending"` |
+| `log_step(service, status, input_data, output_data, error, latency, model_version)` | Appends one step dict to `steps[]`. All params except `service` and `status` are optional |
+| `finalize(status)` | Sets `final_status`, saves JSON to `audit_logs/` folder, returns the dict |
+| `to_dict()` | Returns full audit as a plain Python dict |
+
+**Dependencies:** Only Python standard library (`uuid`, `json`, `datetime`, `os`, `pathlib`)
+
+**Output JSON structure:**
+```json
+{
+  "request_id": "a1b2c3d4-e5f6-...",
+  "timestamp": "2026-04-04T12:59:00",
+  "steps": [
+    {
+      "service": "yolov8_detection",
+      "status": "success",
+      "timestamp": "2026-04-04T12:59:01",
+      "input": {"filename": "scan.png", "size_bytes": 245000},
+      "output": {"detection_count": 3, "labels": ["gun", "knife", "baton"]},
+      "error": null,
+      "latency": 1.23,
+      "model_version": "yolov8-custom-v1"
+    },
+    {
+      "service": "risk_scoring",
+      "status": "success",
+      "timestamp": "2026-04-04T12:59:02",
+      "input": {"detection_count": 3},
+      "output": {"level": "PROHIBITED", "score": 95},
+      "error": null,
+      "latency": 0.01,
+      "model_version": null
+    }
+  ],
+  "final_status": "success"
+}
+```
+
+---
+
+### Component 2: Pipeline Integration
+
+#### [MODIFY] [main.py](file:///d:/Sem4/Project/Pixel/Model_Backend/main.py)
+
+**What changes:** Add ~15 lines of `audit.log_step()` calls inside the existing `/api/analyze` endpoint. **No existing logic is modified.**
+
+**Exact integration points:**
+
+```
+Location in main.py          What we add
+─────────────────────────────────────────────────────────────
+Line ~200 (start of func)    audit = AuditTrail()
+Line ~220 (after YOLO)       audit.log_step("yolov8_detection", ...)
+Line ~223 (after risk)       audit.log_step("risk_scoring", ...)
+Line ~233 (after gradcam)    audit.log_step("gradcam_generation", ...)
+Line ~265 (after SSIM)       audit.log_step("ssim_comparison", ...)
+Line ~308 (after zero-shot)  audit.log_step("zero_shot_inspection", ...)
+Line ~215 (after manifest)   audit.log_step("manifest_extraction", ...)
+Line ~327 (before return)    audit.finalize("success")
+Line ~327 (in return dict)   Add "request_id" to response
+catch blocks                 audit.log_step(..., status="failed", error=str(e))
+```
+
+**What gets logged per step:**
+
+| Pipeline Step | `input` logged | `output` logged |
+|--------------|----------------|-----------------|
+| YOLO Detection | filename, file size | detection count, label list |
+| Risk Scoring | detection count | risk level, score |
+| Grad-CAM | image dimensions | output file path |
+| SSIM Comparison | has_reference: true | ssim score, interpretation, region count |
+| Zero-Shot | label count, label list | verdict, declared/undeclared counts |
+| Manifest Extract | filename | item count, items list |
+
+> [!IMPORTANT]
+> We NEVER log raw image data, large arrays, or binary content. Only small metadata summaries.
+
+**Response changes:**
+
+```json
+// Before
+{"detections": [...], "risk": {...}, "outputs": {...}}
+
+// After (just adds request_id)
+{"detections": [...], "risk": {...}, "outputs": {...}, "request_id": "a1b2c3d4-..."}
+```
+
+---
+
+### Component 3: Storage
+
+#### [NEW] Folder `Model_Backend/audit_logs/`
+
+Auto-created by `AuditTrail.finalize()`. Each request saves one JSON file:
+
+```
+Model_Backend/
+  audit_logs/
+    ├── a1b2c3d4-e5f6-7890-abcd-ef1234567890.json
+    ├── b2c3d4e5-f6a7-8901-bcde-f12345678901.json
+    └── ...
+```
+
+Filename = `{request_id}.json`
+
+---
+
+## What Does NOT Change
+
+| File | Modified? | Reason |
+|------|:---------:|--------|
+| `utils/detector.py` | ❌ | Audit is called from main.py, not inside detector |
+| `utils/gradcam.py` | ❌ | Same — audit happens after the function returns |
+| `utils/risk_scorer.py` | ❌ | Same |
+| `utils/image_comparator.py` | ❌ | Same |
+| `utils/zero_shot_inspector.py` | ❌ | Same |
+| All frontend files | ❌ | Frontend just gets an extra `request_id` field |
+
+---
+
+## Architecture Diagram
+
+```mermaid
+flowchart TD
+    subgraph YOUR_PIPELINE["Your Pipeline (can change anytime)"]
+        A[User Request] --> B[YOLO Detection]
+        B --> C[Risk Scoring]
+        C --> D[Grad-CAM]
+        D --> E[SSIM / Zero-Shot]
+    end
+    
+    subgraph AUDIT_SYSTEM["Audit System (never changes)"]
+        F[AuditTrail Class]
+        G[audit_logs/ folder]
+    end
+    
+    B -->|"log_step()"| F
+    C -->|"log_step()"| F
+    D -->|"log_step()"| F
+    E -->|"log_step()"| F
+    F -->|"finalize()"| G
+```
+
+**The dotted lines (`log_step()` calls) are the ONLY connection.** If your pipeline changes, you just move/add/remove those calls. The audit system itself never changes.
+
+---
+
+## Verification Plan
+
+After implementation, I will:
+
+1. **Read the created `audit.py`** to verify it has zero project-specific imports
+2. **Read the modified `main.py`** to verify existing pipeline logic is untouched
+3. **Run a test** — call the `/api/analyze` endpoint and check that:
+   - Response includes `request_id`
+   - A JSON file appears in `audit_logs/`
+   - The JSON contains all pipeline steps with correct structure
+
+---
+
+## Future Phases (NOT building now)
+
+| Phase | What | When |
+|-------|------|------|
+| Phase 2 | Pinata/IPFS upload | After Phase 1 works |
+| Phase 3 | Supabase metadata storage | After Phase 2 works |
+| Phase 4 | Encryption before IPFS | After Phase 3 works |
+| Phase 5 | Blockchain CID anchoring | Last |
+
+Each phase adds to the audit system WITHOUT changing Phase 1 code.

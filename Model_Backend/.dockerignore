@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# Runtime artifacts (created at runtime)
+outputs/
+audit_logs/
+
+# Test data
+test_images/
+tests/
+
+# Documentation
+*.md
+docs/
+
+# Duplicate model file (keep only utils/sam2_b.pt)
+sam2_b.pt
+
+# Misc
+*.log
+.env.example

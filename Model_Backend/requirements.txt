@@ -3,6 +3,9 @@ fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 python-multipart>=0.0.6
 
+# ── Environment ─────────────────────────────────
+python-dotenv>=1.0.0
+
 # ── ML / inference ─────────────────────────────
 ultralytics
 opencv-python-headless
@@ -23,3 +26,9 @@ scikit-image>=0.22.0
 # -- VLM invoice extraction & async HTTP ----------
 pymupdf>=1.24.0
 httpx>=0.27.0
+
+# ── External services (Supabase, Pinata, VLM) ──
+requests>=2.31.0
+
+# ── Encryption (audit log security) ────────────
+cryptography>=42.0.0

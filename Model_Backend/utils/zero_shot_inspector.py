@@ -29,6 +29,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
+import os
+
 # Suppress harmless torch.classes instantiation warning
 warnings.filterwarnings(
     "ignore",
@@ -51,7 +53,7 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════════
 
 OWL_MODEL_ID = "google/owlv2-base-patch16-ensemble"
-SAM_MODEL_ID = "sam2_b.pt"
+SAM_MODEL_ID = os.environ.get("SAM_MODEL_PATH", "sam2_b.pt")
 
 # Default sweep queries for the "find everything" pass.
 # Designed for X-ray cargo scans — domain-specific hints for dense imagery.
